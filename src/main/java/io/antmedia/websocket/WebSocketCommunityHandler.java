@@ -1,12 +1,9 @@
 package io.antmedia.websocket;
 
-import java.io.IOException;
-
 import javax.websocket.Session;
 
 import org.apache.commons.lang3.exception.ExceptionUtils;
-import org.bytedeco.javacpp.avcodec;
-import org.bytedeco.javacpp.avutil;
+import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.slf4j.Logger;
@@ -20,12 +17,13 @@ import io.antmedia.AntMediaApplicationAdapter;
 import io.antmedia.AppSettings;
 import io.antmedia.IApplicationAdaptorFactory;
 import io.antmedia.StreamIdValidator;
-import io.antmedia.recorder.FFmpegFrameRecorder;
-import io.antmedia.recorder.FrameRecorder;
+import io.antmedia.datastore.db.types.Broadcast;
 import io.antmedia.webrtc.adaptor.RTMPAdaptor;
 
 public class WebSocketCommunityHandler {
 
+	public static final String WebRTC_VERTX_BEAN_NAME = "webRTCVertx";
+	
 	private static Logger logger = LoggerFactory.getLogger(WebSocketCommunityHandler.class);
 
 	private JSONParser jsonParser = new JSONParser();
@@ -37,12 +35,14 @@ public class WebSocketCommunityHandler {
 	protected Session session;
 
 	private String appName;
+
+	private AntMediaApplicationAdapter appAdaptor;
 	
 	public WebSocketCommunityHandler(ApplicationContext appContext, Session session) {
 		this.appContext = appContext;
 		this.session = session;
 		appSettings = (AppSettings) getAppContext().getBean(AppSettings.BEAN_NAME);
-		AntMediaApplicationAdapter appAdaptor = ((IApplicationAdaptorFactory)appContext.getBean(AntMediaApplicationAdapter.BEAN_NAME)).getAppAdaptor();
+		appAdaptor = ((IApplicationAdaptorFactory)appContext.getBean(AntMediaApplicationAdapter.BEAN_NAME)).getAppAdaptor();
 		
 		appName = appAdaptor.getScope().getName();
 	}
@@ -89,6 +89,19 @@ public class WebSocketCommunityHandler {
 
 			if (cmd.equals(WebSocketConstants.PUBLISH_COMMAND)) 
 			{
+				Broadcast broadcast = appAdaptor.getDataStore().get(streamId);
+				if (broadcast != null) {
+					String status = broadcast.getStatus();
+					if (status.endsWith(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING)
+							||
+							status.endsWith(AntMediaApplicationAdapter.BROADCAST_STATUS_PREPARING)) 
+					{
+						logger.error("Sending stream id in use error for stream:{} session:{}", streamId, session.getId());
+						sendStreamIdInUse(session);
+						return;
+					}
+				}
+				
 				//get scope and use its name
 				startRTMPAdaptor(session, streamId);
 			}
@@ -136,13 +149,15 @@ public class WebSocketCommunityHandler {
 		}
 
 	}
+	
+	
 
 	private void startRTMPAdaptor(Session session, final String streamId) {
 
 		//get scope and use its name
 		String outputURL = "rtmp://127.0.0.1/"+ appName +"/" + streamId;
 
-		RTMPAdaptor connectionContext = getNewRTMPAdaptor(outputURL);
+		RTMPAdaptor connectionContext = getNewRTMPAdaptor(outputURL, appSettings.getHeightRtmpForwarding());
 
 		session.getUserProperties().put(session.getId(), connectionContext);
 
@@ -155,8 +170,8 @@ public class WebSocketCommunityHandler {
 		connectionContext.start();
 	}
 
-	public RTMPAdaptor getNewRTMPAdaptor(String outputURL) {
-		return new RTMPAdaptor(getNewRecorder(outputURL), this);
+	public RTMPAdaptor getNewRTMPAdaptor(String outputURL, int height) {
+		return new RTMPAdaptor(outputURL, this, height);
 	}
 
 	public void addICECandidate(final String streamId, RTMPAdaptor connectionContext, String sdpMid, String sdp,
@@ -207,10 +222,18 @@ public class WebSocketCommunityHandler {
 		jsonObj.put(WebSocketConstants.STREAM_ID, streamId);
 
 		if(roomName != null) {
-			jsonObj.put(WebSocketConstants.ATTR_ROOM_NAME, roomName);
+			jsonObj.put(WebSocketConstants.ATTR_ROOM_NAME, roomName); //keep it for compatibility
+			jsonObj.put(WebSocketConstants.ROOM, roomName);
 		}
 
 		sendMessage(jsonObj.toJSONString(), session);
+	}
+	
+	public void sendStreamIdInUse(Session session) {
+		JSONObject jsonResponse = new JSONObject();
+		jsonResponse.put(WebSocketConstants.COMMAND, WebSocketConstants.ERROR_COMMAND);
+		jsonResponse.put(WebSocketConstants.DEFINITION, WebSocketConstants.STREAM_ID_IN_USE);
+		sendMessage(jsonResponse.toJSONString(), session);
 	}
 	
 	@SuppressWarnings("unchecked")
@@ -242,38 +265,6 @@ public class WebSocketCommunityHandler {
 	}
 
 
-	public static FFmpegFrameRecorder getNewRecorder(String outputURL) {
-		return getNewRecorder(outputURL, 640, 480);
-	}
-	
-	public static FFmpegFrameRecorder getNewRecorder(String outputURL, int width, int height) {
-
-		FFmpegFrameRecorder recorder = initRecorder(outputURL, width, height);
-
-		try {
-			recorder.start();
-		} catch (FrameRecorder.Exception e) {
-			logger.error(ExceptionUtils.getStackTrace(e));
-		}
-
-		return recorder;
-	}
-
-	public static FFmpegFrameRecorder initRecorder(String outputURL, int width, int height) {
-		FFmpegFrameRecorder recorder = new FFmpegFrameRecorder(outputURL, width, height, 1);
-		recorder.setFormat("flv");
-		recorder.setSampleRate(44100);
-		// Set in the surface changed method
-		recorder.setFrameRate(20);
-		recorder.setPixelFormat(avutil.AV_PIX_FMT_YUV420P);
-		recorder.setVideoCodec(avcodec.AV_CODEC_ID_H264);
-		recorder.setAudioCodec(avcodec.AV_CODEC_ID_AAC);
-		recorder.setAudioChannels(2);
-		recorder.setGopSize(40);
-		recorder.setVideoQuality(29);
-		return recorder;
-	}
-
 	@SuppressWarnings("unchecked")
 	public  final  void sendNoStreamIdSpecifiedError(Session session)  {
 		JSONObject jsonResponse = new JSONObject();
@@ -281,7 +272,7 @@ public class WebSocketCommunityHandler {
 		jsonResponse.put(WebSocketConstants.DEFINITION, WebSocketConstants.NO_STREAM_ID_SPECIFIED);
 		sendMessage(jsonResponse.toJSONString(), session);	
 	}
-
+	
 	@SuppressWarnings("unchecked")
 	public void sendTakeCandidateMessage(long sdpMLineIndex, String sdpMid, String sdp, String streamId, Session session)
 	{
@@ -296,11 +287,35 @@ public class WebSocketCommunityHandler {
 			if (session.isOpen()) {
 				try {
 					session.getBasicRemote().sendText(message);
-				} catch (IOException e) {
+				} catch (Exception e) { 
+					//capture all exceptions because some unexpected events may happen it causes some internal errors
 					logger.error(ExceptionUtils.getStackTrace(e));
 				}
 			}
 		}
+	}
+	
+	public void sendRoomInformation(JSONArray jsonStreamArray , String roomId) 
+	{
+		JSONObject jsObject = new JSONObject();
+		jsObject.put(WebSocketConstants.COMMAND, WebSocketConstants.ROOM_INFORMATION_NOTIFICATION);
+		jsObject.put(WebSocketConstants.STREAMS_IN_ROOM, jsonStreamArray);	
+		jsObject.put(WebSocketConstants.ATTR_ROOM_NAME, roomId);
+		jsObject.put(WebSocketConstants.ROOM, roomId);
+		String jsonString = jsObject.toJSONString();
+		sendMessage(jsonString, session);
+	}
+	
+	public void sendJoinedRoomMessage(String room, String newStreamId, JSONArray jsonStreamArray) {
+		JSONObject jsonResponse = new JSONObject();
+		jsonResponse.put(WebSocketConstants.COMMAND, WebSocketConstants.NOTIFICATION_COMMAND);
+		jsonResponse.put(WebSocketConstants.DEFINITION, WebSocketConstants.JOINED_THE_ROOM);
+		jsonResponse.put(WebSocketConstants.STREAM_ID, newStreamId);
+		jsonResponse.put(WebSocketConstants.STREAMS_IN_ROOM, jsonStreamArray);	
+		jsonResponse.put(WebSocketConstants.ATTR_ROOM_NAME, room);	
+		jsonResponse.put(WebSocketConstants.ROOM, room);	
+
+		sendMessage(jsonResponse.toJSONString(), session);
 	}
 
 
@@ -343,6 +358,10 @@ public class WebSocketCommunityHandler {
 		this.appContext = appContext;
 	}
 	
+	public void setAppAdaptor(AntMediaApplicationAdapter appAdaptor) {
+		this.appAdaptor = appAdaptor;
+	}
+	
 	public void sendRemoteDescriptionSetFailure(Session session, String streamId) {
 		JSONObject jsonObject = new JSONObject();
 		jsonObject.put(WebSocketConstants.COMMAND, WebSocketConstants.ERROR_COMMAND);
@@ -367,5 +386,19 @@ public class WebSocketCommunityHandler {
 		jsonResponse.put(WebSocketConstants.DEFINITION, WebSocketConstants.NO_STREAM_EXIST);
 		jsonResponse.put(WebSocketConstants.STREAM_ID, streamId);
 		sendMessage(jsonResponse.toJSONString(), session);
+	}
+
+	public void sendServerError(String streamId, Session session) {
+		JSONObject jsonResponse = new JSONObject();
+		jsonResponse.put(WebSocketConstants.COMMAND, WebSocketConstants.ERROR_COMMAND);
+		jsonResponse.put(WebSocketConstants.DEFINITION, WebSocketConstants.SERVER_ERROR_CHECK_LOGS);
+		jsonResponse.put(WebSocketConstants.STREAM_ID, streamId);
+		sendMessage(jsonResponse.toJSONString(), session);
+		
+	}
+
+	public void setSession(Session session) {
+		this.session = session;
+		
 	}
 }

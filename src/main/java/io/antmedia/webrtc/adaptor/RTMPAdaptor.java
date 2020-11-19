@@ -1,6 +1,6 @@
 package io.antmedia.webrtc.adaptor;
 
-import static org.bytedeco.javacpp.avutil.AV_PIX_FMT_YUV420P;
+import static org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P;
 
 import java.nio.ByteBuffer;
 import java.nio.ShortBuffer;
@@ -13,6 +13,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang3.exception.ExceptionUtils;
+import org.bytedeco.ffmpeg.global.avcodec;
+import org.bytedeco.ffmpeg.global.avutil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.webrtc.IceCandidate;
@@ -65,14 +67,50 @@ public class RTMPAdaptor extends Adaptor {
 
 	public static final String DTLS_SRTP_KEY_AGREEMENT_CONSTRAINT = "DtlsSrtpKeyAgreement";
 
-	private String stunServerUri ="stun:stun.l.google.com:19302";
+	private String stunServerUri ="stun:stun1.l.google.com:19302";
 	private int portRangeMin = 0; 
 	private int portRangeMax = 0;
 	private boolean tcpCandidatesEnabled = true;
+	private int height;
+	private String outputURL;
 
-	public RTMPAdaptor(FFmpegFrameRecorder recorder, WebSocketCommunityHandler webSocketHandler) {
+	private int errorLoopCount = 0;
+	
+	public static FFmpegFrameRecorder initRecorder(String outputURL, int width, int height) {
+		FFmpegFrameRecorder recorder = new FFmpegFrameRecorder(outputURL, width, height, 1);
+		recorder.setFormat("flv");
+		recorder.setSampleRate(44100);
+		// Set in the surface changed method
+		recorder.setFrameRate(20);
+		recorder.setPixelFormat(avutil.AV_PIX_FMT_YUV420P);
+		recorder.setVideoCodec(avcodec.AV_CODEC_ID_H264);
+		recorder.setAudioCodec(avcodec.AV_CODEC_ID_AAC);
+		recorder.setAudioChannels(2);
+		recorder.setGopSize(40);
+		recorder.setVideoQuality(29);
+		return recorder;
+	}
+	
+	public FFmpegFrameRecorder getNewRecorder(String outputURL, int width, int height) {
+
+		FFmpegFrameRecorder recorder = initRecorder(outputURL, width, height);
+
+		try {
+			recorder.start();
+		} catch (FrameRecorder.Exception e) {
+			logger.error(ExceptionUtils.getStackTrace(e));
+			webSocketCommunityHandler.sendServerError(getStreamId(), getSession());
+			//close the connection because it's useless
+			stop();
+		}
+
+		return recorder;
+	}
+
+	public RTMPAdaptor(String outputURL, WebSocketCommunityHandler webSocketHandler, int height) {
 		super(webSocketHandler);
-		this.recorder = recorder;
+		this.outputURL = outputURL;
+		this.height = height;
 
 		setSdpMediaConstraints(new MediaConstraints());
 		getSdpMediaConstraints().mandatory.add(
@@ -175,6 +213,7 @@ public class RTMPAdaptor extends Adaptor {
 	@Override
 	public void stop() {
 		if (isStopped) {
+			logger.info("Stopped already called. It's returning for stream: {}", getStreamId());
 			return;
 		}
 		isStopped  = true;
@@ -183,8 +222,10 @@ public class RTMPAdaptor extends Adaptor {
 			audioDataSchedulerFuture.cancel(false);
 		}
 
+		logger.info("Scheduling stop procedure for stream: {}", getStreamId());
 		signallingExecutor.execute(() -> {
 
+			logger.info("Executing stop procedure for stream: {}", getStreamId());
 			webSocketCommunityHandler.sendPublishFinishedMessage(getStreamId(), getSession());
 
 
@@ -231,20 +272,38 @@ public class RTMPAdaptor extends Adaptor {
 			audioFrameCount++;
 			ByteBuffer playoutData = webRtcAudioTrack.getPlayoutData();
 
-			audioEncoderExecutor.execute(() -> {
-
-				ShortBuffer audioBuffer = playoutData.asShortBuffer();
-				try {
-					boolean result = recorder.recordSamples(webRtcAudioTrack.getSampleRate(), webRtcAudioTrack.getChannels(), audioBuffer);
-					if (!result) {
-						logger.info("could not audio sample for stream Id {}", getStreamId());
-					}
-				} catch (FrameRecorder.Exception e) {
-					logger.error(ExceptionUtils.getStackTrace(e));
-				}
-			});
+			audioEncoderExecutor.execute(() -> 
+				recordSamples(playoutData)
+			);
 
 		}, 0, 10, TimeUnit.MILLISECONDS);
+	}
+	
+	public void recordSamples(ByteBuffer playoutData) {
+		ShortBuffer audioBuffer = playoutData.asShortBuffer();
+		try {
+			//null-check recorder because it's asynch and it may not be initialized in video encoder thread
+			if (recorder != null) {
+				
+				boolean result = recorder.recordSamples(webRtcAudioTrack.getSampleRate(), webRtcAudioTrack.getChannels(), audioBuffer);
+				if (!result) {
+					logger.info("could not audio sample for stream Id {}", getStreamId());
+				}
+			}
+		} catch (Exception e) {
+			logger.error(ExceptionUtils.getStackTrace(e));
+		}
+	}
+	
+	public void initializeRecorder(VideoFrame frame) {
+		if (recorder == null) 
+		{
+			int width = (frame.getRotatedWidth() * height) / frame.getRotatedHeight();
+			if (width % 2 == 1) {
+				width++;
+			}
+			recorder = getNewRecorder(outputURL, width, height);
+		}
 	}
 
 
@@ -285,8 +344,8 @@ public class RTMPAdaptor extends Adaptor {
 						videoFrameLogCounter++;
 
 						if (videoFrameLogCounter % 100 == 0) {
-							logger.info("Received total video frames: {}  received fps: {}" , 
-									frameCount, frameCount/((System.currentTimeMillis() - startTime)/1000));
+							logger.info("Received total video frames: {}  received fps: {} frame rotated width:{} rotated height:{} width:{} height:{} rotation:{}" , 
+									frameCount, frameCount/((System.currentTimeMillis() - startTime)/1000), frame.getRotatedWidth(), frame.getRotatedHeight(), frame.getBuffer().getWidth(), frame.getBuffer().getHeight(), frame.getRotation());
 							videoFrameLogCounter = 0;
 
 						}
@@ -300,7 +359,10 @@ public class RTMPAdaptor extends Adaptor {
 							else {
 								pts = (System.currentTimeMillis() - startTime);
 							}
-
+							
+							//initialize recorder if it's not initia lized
+							initializeRecorder(frame);
+							
 							frameNumber = (int)(pts * recorder.getFrameRate() / 1000f);
 
 							if (frameNumber > lastFrameNumber) {
@@ -328,6 +390,11 @@ public class RTMPAdaptor extends Adaptor {
 
 									} catch (FrameRecorder.Exception e) {
 										logger.error(ExceptionUtils.getStackTrace(e));
+										errorLoopCount += 1;
+										if (errorLoopCount > 5){
+											webSocketCommunityHandler.sendServerError(getStreamId(), getSession());
+											stop();
+										}
 									}
 								}
 								else {
@@ -409,6 +476,22 @@ public class RTMPAdaptor extends Adaptor {
 
 	public void setTcpCandidatesEnabled(boolean tcpCandidatesEnabled) {
 		this.tcpCandidatesEnabled  = tcpCandidatesEnabled;
+	}
+	
+	public int getHeight() {
+		return height;
+	}
+	
+	public String getOutputURL() {
+		return outputURL;
+	}
+	
+	public void setRecorder(FFmpegFrameRecorder recorder) {
+		this.recorder = recorder;
+	}
+	
+	public void setWebRtcAudioTrack(WebRtcAudioTrack webRtcAudioTrack) {
+		this.webRtcAudioTrack = webRtcAudioTrack;
 	}
 
 }

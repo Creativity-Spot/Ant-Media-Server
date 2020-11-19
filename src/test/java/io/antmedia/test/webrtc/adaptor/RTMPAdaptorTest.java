@@ -1,6 +1,6 @@
 package io.antmedia.test.webrtc.adaptor;
 
-import static org.bytedeco.javacpp.avutil.AV_PIX_FMT_YUV420P;
+import static org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -23,10 +23,14 @@ import javax.websocket.Session;
 
 import org.apache.commons.lang3.RandomStringUtils;
 import org.awaitility.Awaitility;
-import org.bytedeco.javacpp.avutil.AVFrame;
+import org.bytedeco.ffmpeg.avutil.AVFrame;
 import org.json.simple.JSONObject;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
+import org.junit.rules.TestWatcher;
+import org.junit.runner.Description;
 import org.mockito.Mockito;
 import org.red5.server.api.scope.IScope;
 import org.springframework.context.ApplicationContext;
@@ -34,7 +38,9 @@ import org.webrtc.IceCandidate;
 import org.webrtc.MediaStream;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.SessionDescription;
+import org.webrtc.VideoFrame;
 import org.webrtc.SessionDescription.Type;
+import org.webrtc.audio.WebRtcAudioTrack;
 
 import io.antmedia.AntMediaApplicationAdapter;
 import io.antmedia.AppSettings;
@@ -49,6 +55,20 @@ import io.antmedia.websocket.WebSocketCommunityHandler;
 import io.antmedia.websocket.WebSocketConstants;
 
 public class RTMPAdaptorTest {
+	
+	@Rule
+	public TestRule watcher = new TestWatcher() {
+		protected void starting(Description description) {
+			System.out.println("Starting test: " + description.getMethodName());
+		}
+
+		protected void failed(Throwable e, Description description) {
+			System.out.println("Failed test: " + description.getMethodName());
+		};
+		protected void finished(Description description) {
+			System.out.println("Finishing test: " + description.getMethodName());
+		};
+	};
 
 	@Before
 	public void setup() {
@@ -63,7 +83,7 @@ public class RTMPAdaptorTest {
 
 		WebSocketCommunityHandler webSocketHandler = mock(WebSocketCommunityHandler.class);
 
-		RTMPAdaptor adaptorReal = new RTMPAdaptor(recorder, webSocketHandler);
+		RTMPAdaptor adaptorReal = new RTMPAdaptor("rtmp://url", webSocketHandler, 360);
 		RTMPAdaptor rtmpAdaptor = spy(adaptorReal);
 
 		String streamId = "stramId" + (int)(Math.random()*10000);
@@ -87,7 +107,8 @@ public class RTMPAdaptorTest {
 	public void testUnexpectedLineSize() {
 		//Create FFmpegFRameRecoder
 		File f = new File("target/test-classes/encoded_frame"+(int)(Math.random()*10010)+".flv");
-		FFmpegFrameRecorder recorder = WebSocketCommunityHandler.getNewRecorder(f.getAbsolutePath(), 640, 480);
+		RTMPAdaptor adaptor = new RTMPAdaptor(f.getAbsolutePath(), null, 480);
+		FFmpegFrameRecorder recorder = adaptor.getNewRecorder(f.getAbsolutePath(), 640, 480);
 
 		//give raw frame
 
@@ -138,7 +159,8 @@ public class RTMPAdaptorTest {
 	public void testEncode(int width, int height) {
 		//Create FFmpegFRameRecoder
 		File f = new File("target/test-classes/encoded_frame"+(int)(Math.random()*10010)+".flv");
-		FFmpegFrameRecorder recorder = WebSocketCommunityHandler.getNewRecorder(f.getAbsolutePath(), width, height);
+		RTMPAdaptor adaptor = new RTMPAdaptor(f.getAbsolutePath(), null, height);
+		FFmpegFrameRecorder recorder = adaptor.getNewRecorder(f.getAbsolutePath(), width, height);
 
 		//give raw frame
 
@@ -188,17 +210,16 @@ public class RTMPAdaptorTest {
 	@Test
 	public void testVideoDecoderFactory() {
 		//Video decoder factory should return null otherwise it does not work
-		RTMPAdaptor rtmpAdaptor = new RTMPAdaptor(null, null);
+		RTMPAdaptor rtmpAdaptor = new RTMPAdaptor(null, null, 0);
 		assertNull(rtmpAdaptor.getVideoDecoderFactory());
 	}
 
 
 	@Test
 	public void testIsStarted() {
-		FFmpegFrameRecorder recorder = mock(FFmpegFrameRecorder.class);
 		WebSocketCommunityHandler webSocketHandler = getSpyWebSocketHandler();
 
-		RTMPAdaptor rtmpAdaptor = new RTMPAdaptor(recorder, webSocketHandler);
+		RTMPAdaptor rtmpAdaptor = new RTMPAdaptor("rtmp url", webSocketHandler, 360);
 
 		String streamId = "stramId" + (int)(Math.random()*10000);
 		rtmpAdaptor.setStreamId(streamId);
@@ -211,9 +232,8 @@ public class RTMPAdaptorTest {
 		rtmpAdaptor.start();
 
 
-
 		Awaitility.await().pollDelay(1, TimeUnit.SECONDS)
-		.atMost(10, TimeUnit.SECONDS)
+		.atMost(20, TimeUnit.SECONDS)
 		.until(() -> rtmpAdaptor.isStarted());
 
 
@@ -224,13 +244,13 @@ public class RTMPAdaptorTest {
 		rtmpAdaptor.stop();
 
 		Awaitility.await().pollDelay(1, TimeUnit.SECONDS)
-		.atMost(10, TimeUnit.SECONDS)
+		.atMost(20, TimeUnit.SECONDS)
 		.until(() -> rtmpAdaptor.getAudioDataSchedulerFuture().isCancelled());
 
 		assertTrue(rtmpAdaptor.getAudioDataSchedulerFuture().isCancelled());
 
 		Awaitility.await().pollDelay(1, TimeUnit.SECONDS)
-		.atMost(10, TimeUnit.SECONDS)
+		.atMost(20, TimeUnit.SECONDS)
 		.until(() -> rtmpAdaptor.isStopped());
 
 	}
@@ -263,7 +283,7 @@ public class RTMPAdaptorTest {
 
 		WebSocketCommunityHandler webSocketHandler = getSpyWebSocketHandler();
 
-		RTMPAdaptor adaptorReal = new RTMPAdaptor(recorder, webSocketHandler);
+		RTMPAdaptor adaptorReal = new RTMPAdaptor("rtmp_url", webSocketHandler, 360);
 		RTMPAdaptor rtmpAdaptor = spy(adaptorReal);
 
 		String streamId = "stramId" + (int)(Math.random()*10000);
@@ -296,6 +316,28 @@ public class RTMPAdaptorTest {
 
 
 	}
+	
+	@Test
+	public void testCallStopMultipletime() {
+		FFmpegFrameRecorder recorder = mock(FFmpegFrameRecorder.class);
+
+		WebSocketCommunityHandler webSocketHandler = getSpyWebSocketHandler();
+
+		RTMPAdaptor adaptorReal = new RTMPAdaptor("rtmp_url", webSocketHandler, 360);
+		
+		adaptorReal.setSession(mock(Session.class));
+		
+		adaptorReal.start();
+
+		Awaitility.await().atMost(5, TimeUnit.SECONDS).until(() -> adaptorReal.isStarted());
+		
+		adaptorReal.stop();
+		
+		Awaitility.await().atMost(5, TimeUnit.SECONDS).until(() -> adaptorReal.getSignallingExecutor().isShutdown());
+		
+		adaptorReal.stop();
+		
+	}
 
 	@Test
 	public void testStartandStop() {
@@ -304,7 +346,7 @@ public class RTMPAdaptorTest {
 
 		WebSocketCommunityHandler webSocketHandler = getSpyWebSocketHandler();
 
-		RTMPAdaptor adaptorReal = new RTMPAdaptor(recorder, webSocketHandler);
+		RTMPAdaptor adaptorReal = new RTMPAdaptor("rtmp_url", webSocketHandler, 360);
 		RTMPAdaptor rtmpAdaptor = spy(adaptorReal);
 
 		String streamId = "stramId" + (int)(Math.random()*10000);
@@ -370,7 +412,7 @@ public class RTMPAdaptorTest {
 	public void testGetFileFormat() {
 
 
-		FFmpegFrameRecorder recorder = WebSocketCommunityHandler.initRecorder("rtmp://test", 640, 480);
+		FFmpegFrameRecorder recorder = RTMPAdaptor.initRecorder("rtmp://test", 640, 480);
 
 		assertEquals("flv", recorder.getFormat());
 	}
@@ -382,7 +424,7 @@ public class RTMPAdaptorTest {
 
 			WebSocketCommunityHandler handler = mock(WebSocketCommunityHandler.class);
 
-			RTMPAdaptor rtmpAdaptor = new RTMPAdaptor(null, handler);
+			RTMPAdaptor rtmpAdaptor = new RTMPAdaptor(null, handler, 360);
 
 			MediaStream stream = new MediaStream(0L);
 
@@ -400,6 +442,71 @@ public class RTMPAdaptorTest {
 		}
 
 	}
+	
+	@Test
+	public void testRecordSamples() {
+		RTMPAdaptor adaptor = new RTMPAdaptor("rtmp://", null, 360);
+		
+		FFmpegFrameRecorder recorder = Mockito.mock(FFmpegFrameRecorder.class);
+		adaptor.setWebRtcAudioTrack(Mockito.mock(WebRtcAudioTrack.class));
+		
+		ByteBuffer buffer = ByteBuffer.allocate(10);
+		adaptor.recordSamples(buffer);
+		
+		try {
+			verify(recorder, Mockito.never()).recordSamples(Mockito.anyInt(), Mockito.anyInt(), Mockito.any());
+		} catch (io.antmedia.recorder.FrameRecorder.Exception e) {
+			e.printStackTrace();
+			fail(e.getMessage());
+		}
+		
+		
+		adaptor.setRecorder(recorder);
+		adaptor.recordSamples(buffer);
+		
+		try {
+			verify(recorder).recordSamples(Mockito.anyInt(), Mockito.anyInt(), Mockito.any());
+		} catch (io.antmedia.recorder.FrameRecorder.Exception e) {
+			e.printStackTrace();
+			fail(e.getMessage());
+		}
+		
+	}
+	
+	@Test
+	public void testInitializeRecorder() {
+		
+		String rtmpUrl = "rtmp://"+(int)(Math.random()*10000);
+		
+		Session session = Mockito.mock(Session.class);
+		WebSocketCommunityHandler handler = getSpyWebSocketHandler(); //Mockito.spy(new WebSocketCommunityHandler(null, session));
+		handler.setSession(session);
+		
+		RTMPAdaptor adaptor = new RTMPAdaptor(rtmpUrl, handler, 480);
+		String streamId = "stream" + (int)(Math.random()*1000);
+		adaptor.setStreamId(streamId);
+		adaptor.setSession(session);
+		RTMPAdaptor adaptorSpy = Mockito.spy(adaptor);
+		
+		VideoFrame frame = Mockito.mock(VideoFrame.class);
+		when(frame.getRotatedWidth()).thenReturn(480);
+		when(frame.getRotatedHeight()).thenReturn(360);
+		
+		Mockito.doNothing().when(adaptorSpy).stop();
+				
+		adaptorSpy.initializeRecorder(frame);
+		verify(adaptorSpy).getNewRecorder(rtmpUrl, 640, 480);
+		
+		//stop should be called because rtmp url is not valid
+		verify(adaptorSpy).stop();
+		
+		adaptorSpy.initializeRecorder(frame);
+		verify(adaptorSpy, Mockito.times(1)).getNewRecorder(rtmpUrl, 640, 480);
+		verify(handler).sendServerError(streamId, session);
+		
+	}
+	
+	
 	
 	/*
 	 * This test is only for sonar coverage for now. Because tested class is mock and not doing anything
@@ -425,5 +532,6 @@ public class RTMPAdaptorTest {
 		mock.setPacketLossDiffThresholdForSwitchback(0);
 		mock.setRttMeasurementDiffThresholdForSwitchback(0);
 		mock.setTryCountBeforeSwitchback(0);
+		mock.forceStreamingQuality(null,null,0);
 	}
 }

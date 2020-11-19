@@ -49,11 +49,7 @@ public class WebSocketConstants {
 	public static final String STOP_COMMAND = "stop";
 	
 	public static final String START_COMMAND = "start";
-
-	public static final String STREAM_LEAVED = "streamLeaved";
 	
-	public static final String STREAM_JOINED = "streamJoined";
-
 	public static final String PUBLISH_COMMAND = "publish";
 
 	public static final String PUBLISH_STARTED = "publish_started";
@@ -81,12 +77,6 @@ public class WebSocketConstants {
 	 */
 	
 	public static final String LEAVE_THE_ROOM = "leaveFromRoom";
-	
-	/**
-	 * this map includes streamId as key, room name as value  for active session
-	 */
-	
-	public static final String SESSION_STREAM_ROOM_MAP = "session_room_map";
 
 	public static final String JOINED_THE_ROOM = "joinedTheRoom";
 	
@@ -147,6 +137,13 @@ public class WebSocketConstants {
 	public static final String ROOM_TIME_INVALID = "room_not_active_or_expired";
 	
 	
+	/**
+	 * This is sent back to the user when stream plannedStartDate and plannedEndDate 
+	 * values are in interval or not.
+	 */
+	public static final String STREAM_TIME_INVALID = "stream_not_active_or_expired";
+	
+	
 	public static final String UNAUTHORIZED = "unauthorized_access";
 	
 	/**
@@ -172,17 +169,33 @@ public class WebSocketConstants {
 	 * This info includes height, bitrates, etc.
 	 */
 	public static final String GET_STREAM_INFO_COMMAND = "getStreamInfo";
+	
+	/**
+	 * Command that stream set resolution request.
+	 */
+	public static final String FORCE_STREAM_QUALITY = "forceStreamQuality";
+	
+  /**
+	 * Command that let server returns information about a specific room.
+	 * This info includes stream ID's list in room.
+	 */
+	public static final String GET_ROOM_INFO_COMMAND = "getRoomInfo";
 
 	/**
 	 * Notification field used when returning stream information
 	 */
 	public static final String STREAM_INFORMATION_NOTIFICATION = "streamInformation";
+	
+	/**
+	 * Notification field used when returning room information
+	 */
+	public static final String ROOM_INFORMATION_NOTIFICATION = "roomInformation";
 
 	/**
 	 * Field in messaging to specify the stream info 
 	 */
 	public static final String STREAM_INFO = "streamInfo";
-
+	
 	/**
 	 * Field to specify the stream width
 	 */
@@ -202,6 +215,11 @@ public class WebSocketConstants {
 	 * Field to specify the stream audio bitrate
 	 */
 	public static final String AUDIO_BITRATE = "audioBitrate";
+	
+	/**
+	 * Field to specify the measured bitrate for a WebRTCClient
+	 */
+	public static final String TARGET_BITRATE = "targetBitrate";
 	
 	/**
 	 * Field to specify the stream video codec
@@ -241,6 +259,10 @@ public class WebSocketConstants {
 	 * Error definition it is send when cpu usage exceeds the limit
 	 */
 	public static final String HIGH_RESOURCE_USAGE = "highResourceUsage";
+	/**
+	 * Error definition it is send when viewer limit reached
+	 */
+	public static final String VIEWER_LIMIT_REACHED = "viewerLimitReached";
 	/**
 	 * Error definition it is send when stream name contains special characters
 	 */
@@ -319,5 +341,21 @@ public class WebSocketConstants {
 	 * This command used to send subtracks for a stream id
 	 */
 	public static final String  TRACK_LIST = "trackList";
+
+	/**
+	 * Notification to send measured bitrate
+	 */
+	public static final String BITRATE_MEASUREMENT = "bitrateMeasurement";
+
+	/**
+	 * Error definition. It's sent when data store is not available. 
+	 * It's not available if it's closed or not available;
+	 */
+	public static final String DATA_STORE_NOT_AVAILABLE = "data_store_not_available";
+
+	/**
+	 * It's send when community handler does not start streaming
+	 */
+	public static final String SERVER_ERROR_CHECK_LOGS = "server_error_check_logs";
 
 }

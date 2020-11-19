@@ -2,7 +2,7 @@
     <parent>
         <groupId>io.antmedia</groupId>
         <artifactId>parent</artifactId>
-        <version>2.1.0-SNAPSHOT</version>
+        <version>2.3.0-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
     <artifactId>ant-media-server</artifactId>
@@ -98,6 +98,7 @@
                 <directory>src/test/resources</directory>
             </testResource>
         </testResources>
+        <pluginManagement>
         <plugins>
             <plugin>
                 <artifactId>maven-jar-plugin</artifactId>
@@ -138,7 +139,7 @@
             <plugin>
                 <groupId>org.sonatype.plugins</groupId>
                 <artifactId>nexus-staging-maven-plugin</artifactId>
-                <version>1.6.7</version>
+                <version>${nexus-staging-maven-plugin.version}</version>
                 <extensions>true</extensions>
                 <configuration>
                     <serverId>ossrh</serverId>
@@ -149,7 +150,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-gpg-plugin</artifactId>
-                <version>1.6</version>
+                <version>${maven-gpg-plugin.version}</version>
                 <executions>
                     <execution>
                         <id>sign-artifacts</id>
@@ -169,20 +170,34 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>2.22.1</version>
                 <configuration>
-
                     <useSystemClassLoader>false</useSystemClassLoader>
-
-                    <argLine>@{argLine} -Xmx750M -XX:+UseG1GC -XX:MaxGCPauseMillis=100
-                        -Djava.library.path=${project.basedir}/../Ant-Media-Server/src/main/server/lib/native
-                    </argLine>
+                    <argLine>@{argLine} --illegal-access=permit -Xmx750M -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -Djava.library.path=${project.basedir}/src/main/server/lib/native</argLine>
                 </configuration>
             </plugin>
+             <plugin>
+			    <groupId>org.jacoco</groupId>
+			    <artifactId>jacoco-maven-plugin</artifactId>
+			    <version>0.8.5</version>
+			    <executions>
+			        <execution>
+			            <goals>
+			                <goal>prepare-agent</goal>
+			            </goals>
+			        </execution>
+			        <execution>
+			            <id>report</id>
+			            <phase>test</phase>
+			            <goals>
+			                <goal>report</goal>
+			            </goals>
+			        </execution>
+			    </executions>
+			</plugin>      
             <plugin>
                 <groupId>com.github.kongchen</groupId>
                 <artifactId>swagger-maven-plugin</artifactId>
-                <version>3.1.5</version>
+                <version>3.1.8</version>
                 <configuration>
                     <apiSources>
                         <apiSource>
@@ -209,12 +224,13 @@
                 <configFile>enunciate.xml</configFile> <docsDir>${project.build.directory}</docsDir>
                 </configuration> </execution> </executions> </plugin> -->
         </plugins>
+         </pluginManagement>
     </build>
     <dependencies>
         <dependency>
             <groupId>io.antmedia.ipcamera.onvif</groupId>
             <artifactId>ONVIF</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <version>1.1.0-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -278,7 +294,7 @@
         <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
-            <version>3.5.1</version>
+            <version>${protobuf-java.version}</version>
             <scope>provided</scope>
         </dependency>
         <!-- <dependency> <groupId>uk.org.lidalia</groupId> <artifactId>sysout-over-slf4j</artifactId>
@@ -387,7 +403,7 @@
         </dependency>
         <!-- Runtime plugin deps -->
         <dependency>
-            <groupId>org.red5</groupId>
+            <groupId>io.antmedia</groupId>
             <artifactId>tomcatplugin</artifactId>
             <version>${tomcatplugin.version}</version>
             <scope>provided</scope>
@@ -418,13 +434,13 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
-            <groupId>org.bytedeco.javacpp-presets</groupId>
-            <artifactId>ffmpeg-platform</artifactId>
+    		<groupId>org.bytedeco</groupId>
+    		<artifactId>ffmpeg-platform</artifactId>
             <version>${javacpp.ffmpeg.version}</version>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-			<groupId>org.bytedeco.javacpp-presets</groupId>
+		<dependency>
+			<groupId>org.bytedeco</groupId>
 			<artifactId>cuda-platform</artifactId>
 			<version>${javacpp.cuda.version}</version>
 			<scope>provided</scope>
@@ -491,7 +507,7 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <version>2.11.0</version>
+            <version>${mockito-core.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -502,7 +518,7 @@
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
-            <version>3.1.0</version>
+            <version>${awaitility.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -514,7 +530,7 @@
         <dependency>
             <groupId>org.glassfish.tyrus</groupId>
             <artifactId>tyrus-container-grizzly-server</artifactId>
-            <version>1.12</version>
+            <version>1.17</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -526,7 +542,7 @@
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpmime</artifactId>
-            <version>4.3.1</version>
+            <version>${httpmime.version}</version>
         </dependency>
         <dependency>
 		    <groupId>org.apache.kafka</groupId>
@@ -557,7 +573,7 @@
                     <plugin>
                         <groupId>com.github.spotbugs</groupId>
                         <artifactId>spotbugs-maven-plugin</artifactId>
-                        <version>3.1.1</version>
+                        <version>3.1.12.2</version>
                         <configuration>
                             <effort>Max</effort>
                             <threshold>Low</threshold>
@@ -586,7 +602,7 @@
                      -->
                     <plugin>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <version>2.10</version>
+                        <version>${maven-dependency-plugin.version}</version>
 
                         <executions>
                             <execution>
@@ -681,7 +697,7 @@
                     <plugin>
 			            <groupId>org.codehaus.mojo</groupId>
 						<artifactId>exec-maven-plugin</artifactId>
-						<version>1.3.2</version>
+						<version>${exec-maven-plugin.version}</version>
 						<executions>
 							<execution>
 							    <id>create-liveapp</id>
@@ -715,7 +731,7 @@
 			        </plugin>
                     <plugin>
                         <artifactId>maven-assembly-plugin</artifactId>
-                        <version>2.6</version>
+                        <version>${maven-assembly-plugin.version}</version>
                         <configuration>
                             <descriptors>
                                 <descriptor>src/main/assembly/server.xml</descriptor>
@@ -765,7 +781,7 @@
                 <plugins>
                     <plugin>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <version>2.10</version>
+                        <version>${maven-dependency-plugin.version}</version>
                         <executions>
                             <execution>
                                 <id>copy-dependencies</id>
@@ -777,7 +793,6 @@
                                     <outputDirectory>${project.build.directory}/lib</outputDirectory>
                                     <includeScope>compile</includeScope>
                                     <excludeScope>test</excludeScope>
-
                                     <excludeTransitive>false</excludeTransitive>
                                 </configuration>
                             </execution>
@@ -875,7 +890,7 @@
                     <plugin>
 			            <groupId>org.codehaus.mojo</groupId>
 						<artifactId>exec-maven-plugin</artifactId>
-						<version>1.3.2</version>
+						<version>${exec-maven-plugin.version}</version>
 						<executions>
 							<execution>
 							    <id>create-liveapp</id>
@@ -909,7 +924,7 @@
 			        </plugin>
                     <plugin>
                         <artifactId>maven-assembly-plugin</artifactId>
-                        <version>2.6</version>
+                        <version>${maven-assembly-plugin.version}</version>
                         <configuration>
                             <descriptors>
                                 <descriptor>src/main/assembly/server_enterprise.xml</descriptor>
@@ -939,14 +954,14 @@
                 <plugins>
                     <plugin>
                         <artifactId>maven-war-plugin</artifactId>
-                        <version>2.6</version>
+                        <version>${maven-war-plugin.version}</version>
                         <configuration>
                             <packagingExcludes>WEB-INF/lib/*.jar</packagingExcludes>
                         </configuration>
                     </plugin>
                     <plugin>
                         <artifactId>maven-assembly-plugin</artifactId>
-                        <version>2.6</version>
+                        <version>${maven-assembly-plugin.version}</version>
                         <configuration>
                             <descriptors>
                                 <descriptor>src/main/assembly/war.xml</descriptor>

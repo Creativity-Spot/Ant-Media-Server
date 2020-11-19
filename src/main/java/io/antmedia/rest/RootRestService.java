@@ -8,7 +8,7 @@ import javax.ws.rs.core.MediaType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-
+import io.antmedia.datastore.db.types.ConferenceRoom;
 import io.antmedia.rest.model.Version;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
@@ -17,6 +17,8 @@ import io.swagger.annotations.ExternalDocs;
 import io.swagger.annotations.Info;
 import io.swagger.annotations.License;
 import io.swagger.annotations.SwaggerDefinition;
+
+import java.util.List;
 
 @Api(value = "Rest Service")
 @SwaggerDefinition(
@@ -45,7 +47,42 @@ public class RootRestService extends RestServiceBase {
 	@Produces(MediaType.APPLICATION_JSON)
 	public Version getVersion() {
 		return getSoftwareVersion();
-	}	
-	
-	
+	}
+
+	public static class RoomInfo{
+		private String roomId;
+		private List<String> streamIds;
+		private long endDate = 0;
+		private long startDate = 0;
+
+		public RoomInfo(String roomId, List<String> streamIds, ConferenceRoom room) {
+			this.roomId = roomId;
+			this.streamIds = streamIds;
+			if(room != null) {
+				this.endDate = room.getEndDate();
+				this.startDate = room.getStartDate();
+			}
+		}
+
+		public String getRoomId() {
+
+			return roomId;
+		}
+
+		public long getEndDate() { return endDate; }
+
+		public long getStartDate() { return startDate;}
+
+		public void setRoomId(String roomId) {
+			this.roomId = roomId;
+		}
+
+		public List<String> getStreamIds() {
+			return streamIds;
+		}
+
+		public void setStreamIds(List<String> streamIds) {
+			this.streamIds = streamIds;
+		}
+	}
 }

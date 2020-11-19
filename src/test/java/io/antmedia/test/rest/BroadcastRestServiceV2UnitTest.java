@@ -13,12 +13,15 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.net.UnknownHostException;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -26,6 +29,9 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import javax.ws.rs.core.Response;
@@ -33,7 +39,7 @@ import javax.ws.rs.core.Response.Status;
 
 import org.apache.commons.lang3.RandomStringUtils;
 import org.awaitility.Awaitility;
-import org.bytedeco.javacpp.avformat;
+import org.bytedeco.ffmpeg.global.avformat;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -50,10 +56,14 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.annotation.DirtiesContext.ClassMode;
 import org.springframework.test.context.ContextConfiguration;
+import org.springframework.web.context.ConfigurableWebApplicationContext;
 
 import io.antmedia.AntMediaApplicationAdapter;
 import io.antmedia.AppSettings;
 import io.antmedia.IApplicationAdaptorFactory;
+import io.antmedia.RecordType;
+import io.antmedia.cluster.IClusterNotifier;
+import io.antmedia.cluster.IClusterStore;
 import io.antmedia.datastore.db.DataStore;
 import io.antmedia.datastore.db.InMemoryDataStore;
 import io.antmedia.datastore.db.MongoStore;
@@ -66,6 +76,7 @@ import io.antmedia.datastore.db.types.TensorFlowObject;
 import io.antmedia.datastore.db.types.Token;
 import io.antmedia.datastore.db.types.VoD;
 import io.antmedia.ipcamera.OnvifCamera;
+import io.antmedia.ipcamera.onvifdiscovery.DeviceDiscovery;
 import io.antmedia.muxer.HLSMuxer;
 import io.antmedia.muxer.Mp4Muxer;
 import io.antmedia.muxer.MuxAdaptor;
@@ -91,11 +102,11 @@ import io.antmedia.social.endpoint.VideoServiceEndpoint.DeviceAuthParameters;
 import io.antmedia.statistic.IStatsCollector;
 import io.antmedia.statistic.StatsCollector;
 import io.antmedia.streamsource.StreamFetcher;
+import io.antmedia.streamsource.StreamFetcherManager;
 import io.antmedia.test.StreamFetcherUnitTest;
 import io.antmedia.webrtc.VideoCodec;
 import io.antmedia.webrtc.api.IWebRTCAdaptor;
 import io.vertx.core.Vertx;
-
 
 @ContextConfiguration(locations = { "test.xml" })
 @DirtiesContext(classMode = ClassMode.AFTER_CLASS)
@@ -290,6 +301,32 @@ public class BroadcastRestServiceV2UnitTest {
 		assertEquals(-1, broadcastStatistics.totalRTMPWatchersCount);
 		assertEquals(-1, broadcastStatistics.totalWebRTCWatchersCount);
 	}
+	
+	@Test
+	public void testEnableRecording() {
+		BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
+		
+		Mockito.doReturn(null).when(restServiceSpy).enableMp4Muxing(Mockito.anyString(), Mockito.anyBoolean());
+		Mockito.doReturn(null).when(restServiceSpy).enableWebMMuxing(Mockito.anyString(), Mockito.anyBoolean());
+		
+		
+		restServiceSpy.enableRecording("streamId", true, null);
+		verify(restServiceSpy).enableMp4Muxing("streamId", true);
+		
+		restServiceSpy.enableRecording("streamId", false, null);
+		verify(restServiceSpy).enableMp4Muxing("streamId", false);
+		
+		
+		restServiceSpy.enableRecording("streamId", true, "webm");
+		verify(restServiceSpy).enableWebMMuxing("streamId", true);
+		
+		restServiceSpy.enableRecording("streamId", false, "webm");
+		verify(restServiceSpy).enableWebMMuxing("streamId", false);
+		
+		restServiceSpy.enableRecording("streamId", true, "mp4");
+		verify(restServiceSpy, times(2)).enableMp4Muxing("streamId", true);
+		
+	}
 
 	@Test
 	public void testWebRTCClientStats() {
@@ -382,6 +419,7 @@ public class BroadcastRestServiceV2UnitTest {
 		InMemoryDataStore dataStore = new InMemoryDataStore("testdb");
 		restServiceReal.setDataStore(dataStore);
 		Broadcast broadcast = new Broadcast();
+		broadcast.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
 		String streamId = dataStore.save(broadcast);
 
 		dataStore.updateHLSViewerCount(streamId, 30);
@@ -544,6 +582,14 @@ public class BroadcastRestServiceV2UnitTest {
 			result = (Result) tokenReturn;
 			assertFalse(result.isSuccess());	
 		}
+		
+		{	
+			//set token type null and it should return false
+			tokenReturn = restServiceReal.getTokenV2(streamId, 123432, null, "testRoom").getEntity();
+			assertTrue(tokenReturn instanceof Result);
+			result = (Result) tokenReturn;
+			assertFalse(result.isSuccess());
+		}
 
 		Mockito.when(datastore.saveToken(Mockito.any())).thenReturn(true);
 		tokenReturn = (Object) restServiceReal.getTokenV2(streamId, 123432, Token.PLAY_TOKEN, "testRoom").getEntity();
@@ -661,16 +707,25 @@ public class BroadcastRestServiceV2UnitTest {
 	@Test
 	public void testRemoveEndpointV2() 
 	{
+		ApplicationContext context = mock(ApplicationContext.class);
+		restServiceReal.setAppCtx(context);
+		when(context.containsBean(any())).thenReturn(false);
+		
 		AppSettings settings = mock(AppSettings.class);
 		String serverName = "fully.qualified.domain.name";
+		String serverHostAddress = "127.0.1.1";
 		restServiceReal.setAppSettings(settings);
 		
 		ServerSettings serverSettings = mock(ServerSettings.class);
 		when(serverSettings.getServerName()).thenReturn(serverName);
+		when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
 		restServiceReal.setServerSettings(serverSettings);
 
 
-		Broadcast broadcast = new Broadcast(null, "name");
+		Broadcast broadcast1 = new Broadcast(null, "name1");
+		Broadcast broadcast2 = new Broadcast(null, "name2");
+		Broadcast broadcast3 = new Broadcast(null, "name3");
+		Broadcast broadcast4 = new Broadcast(null, "name4");
 		DataStore store = new InMemoryDataStore("testdb");
 		restServiceReal.setDataStore(store);
 
@@ -681,8 +736,9 @@ public class BroadcastRestServiceV2UnitTest {
 		
 		assertFalse(restServiceReal.removeEndpointV2("any_stream_not_registered", "rtmp://test.endpoint.url/server_test").isSuccess());
 		String streamId = null;
-		{
-			Broadcast createBroadcast = (Broadcast) restServiceReal.createBroadcast(broadcast, null, false).getEntity();
+		// Standallone Remove RTMP Endpoint with same origin and broadcast
+		{			
+			Broadcast createBroadcast = (Broadcast) restServiceReal.createBroadcast(broadcast1, null, false).getEntity();
 			streamId = createBroadcast.getStreamId();
 			assertNotNull(streamId);
 			
@@ -695,10 +751,45 @@ public class BroadcastRestServiceV2UnitTest {
 			assertTrue(result.isSuccess());
 			
 			assertEquals(1, store.get(streamId).getEndPointList().size());
+			
+			serverHostAddress = "127.0.1.1";
+			when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
+			
 			assertTrue(restServiceReal.removeEndpointV2(streamId, store.get(streamId).getEndPointList().get(0).getEndpointServiceId()).isSuccess());
 		}
 		
-		{			
+		// Standallone Remove RTMP Endpoint with different origin and broadcast
+		{	
+			Broadcast createBroadcast = (Broadcast) restServiceReal.createBroadcast(broadcast2, null, false).getEntity();
+			streamId = createBroadcast.getStreamId();
+			assertNotNull(streamId);
+			
+			String endpointURL = "rtmp://test.endpoint.url/test";
+			
+			Endpoint endpoint = new Endpoint();
+			endpoint.setRtmpUrl(endpointURL);
+			
+			Result result = restServiceReal.addEndpointV3(streamId, endpoint);
+			assertTrue(result.isSuccess());
+			
+			assertEquals(1, store.get(streamId).getEndPointList().size());
+			
+			serverHostAddress = "55.55.55.55";
+			when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
+			
+			assertTrue(restServiceReal.removeEndpointV2(streamId, store.get(streamId).getEndPointList().get(0).getEndpointServiceId()).isSuccess());
+		}
+		
+		// enable Cluster mode with same origin and broadcast
+		{
+			// Set Default Host Address
+			serverHostAddress = "127.0.1.1";
+			when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
+			
+			Broadcast createBroadcast = (Broadcast) restServiceReal.createBroadcast(broadcast3, null, false).getEntity();
+			streamId = createBroadcast.getStreamId();
+			assertNotNull(streamId);
+			
 			BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
 			MuxAdaptor muxAdaptor = Mockito.mock(MuxAdaptor.class);
 			
@@ -719,7 +810,53 @@ public class BroadcastRestServiceV2UnitTest {
 			
 			store.updateStatus(streamId, AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
 			
+			when(context.containsBean(any())).thenReturn(true);
+			serverHostAddress = "127.0.1.1";
+			when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
+			
 			assertTrue(restServiceSpy.removeEndpointV2(streamId, store.get(streamId).getEndPointList().get(0).getEndpointServiceId()).isSuccess());
+		}
+		
+		// enable Cluster mode with different origin and broadcast
+		{
+			Broadcast createBroadcast = (Broadcast) restServiceReal.createBroadcast(broadcast4, null, false).getEntity();
+			streamId = createBroadcast.getStreamId();
+			assertNotNull(streamId);
+			
+			BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
+			MuxAdaptor muxAdaptor = Mockito.mock(MuxAdaptor.class);
+			
+			Mockito.doReturn(muxAdaptor).when(restServiceSpy).getMuxAdaptor(streamId);
+			
+			Mockito.when(muxAdaptor.stopRtmpStreaming(Mockito.anyString())).thenReturn(true);
+			String endpointURL = "rtmp://test.endpoint.url/test";
+					
+			Endpoint endpoint = new Endpoint();
+			endpoint.setRtmpUrl(endpointURL);
+
+			Result result = restServiceSpy.addEndpointV3(streamId, endpoint);
+			assertTrue(result.isSuccess());
+					
+			assertEquals(1, store.get(streamId).getEndPointList().size());
+			
+			store.updateStatus(streamId, AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+			
+			when(context.containsBean(any())).thenReturn(true);
+			serverHostAddress = "55.55.55.55";
+			when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
+					
+			assertFalse(restServiceSpy.removeEndpointV2(streamId, store.get(streamId).getEndPointList().get(0).getEndpointServiceId()).isSuccess());
+		}
+				
+		{
+			// Set Default Host Address
+			serverHostAddress = "127.0.1.1";
+			when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
+			
+			Endpoint endpoint6 = new Endpoint();
+			endpoint6.setRtmpUrl("rtmp://test.endpoint.url/any_stream_test");
+			
+			assertFalse(restServiceReal.addEndpointV3("Not_regsitered_stream_id", endpoint6).isSuccess());
 		}
 
 	}
@@ -781,12 +918,19 @@ public class BroadcastRestServiceV2UnitTest {
 
 	@Test
 	public void testAddEndpointV2() {
+		
+		ApplicationContext context = mock(ApplicationContext.class);
+		restServiceReal.setAppCtx(context);
+		when(context.containsBean(any())).thenReturn(false);
+		
 		AppSettings settings = mock(AppSettings.class);
 		String serverName = "fully.qualified.domain.name";
+		String serverHostAddress = "127.0.1.1";
 		restServiceReal.setAppSettings(settings);
 		
 		ServerSettings serverSettings = mock(ServerSettings.class);
 		when(serverSettings.getServerName()).thenReturn(serverName);
+		when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
 		restServiceReal.setServerSettings(serverSettings);
 
 
@@ -823,6 +967,7 @@ public class BroadcastRestServiceV2UnitTest {
 		assertEquals(endpointURL, endpoint2.getRtmpUrl());
 		assertEquals("generic", endpoint2.getType());
 		
+		// Standallone Add RTMP Endpoint with same origin and broadcast
 		{
 			BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
 			MuxAdaptor muxAdaptor = Mockito.mock(MuxAdaptor.class);
@@ -838,12 +983,75 @@ public class BroadcastRestServiceV2UnitTest {
 			assertTrue(restServiceSpy.addEndpointV3(streamId, endpoint3).isSuccess());
 		}
 		
+		// Standallone Add RTMP Endpoint with different origin and broadcast
 		{
+			serverHostAddress = "55.55.55.55";
+			when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
+			
+			BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
+			MuxAdaptor muxAdaptor = Mockito.mock(MuxAdaptor.class);
+			
+			Mockito.doReturn(muxAdaptor).when(restServiceSpy).getMuxAdaptor(broadcast.getStreamId());
+			
+			Mockito.when(muxAdaptor.startRtmpStreaming(Mockito.anyString())).thenReturn(true);
+			
+			Endpoint endpoint3 = new Endpoint();
+			endpoint3.setRtmpUrl("rtmp://test.endpoint.url/any_stream_test");
+			
+			store.updateStatus(broadcast.getStreamId(), AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+			assertTrue(restServiceSpy.addEndpointV3(streamId, endpoint3).isSuccess());
+		}
+		
+		// enable Cluster mode with same origin and broadcast
+		{
+			when(context.containsBean(any())).thenReturn(true);
+			serverHostAddress = "127.0.1.1";
+			when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
+
+			
+			BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
+			MuxAdaptor muxAdaptor = Mockito.mock(MuxAdaptor.class);
+			
+			Mockito.doReturn(muxAdaptor).when(restServiceSpy).getMuxAdaptor(broadcast.getStreamId());
+			
+			Mockito.when(muxAdaptor.startRtmpStreaming(Mockito.anyString())).thenReturn(true);
+			
 			Endpoint endpoint4 = new Endpoint();
 			endpoint4.setRtmpUrl("rtmp://test.endpoint.url/any_stream_test");
 			
-			assertFalse(restServiceReal.addEndpointV3("Not_regsitered_stream_id", endpoint4).isSuccess());
+			store.updateStatus(broadcast.getStreamId(), AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+			assertTrue(restServiceSpy.addEndpointV3(streamId, endpoint4).isSuccess());
+			
 		}
+		
+		// enable Cluster mode with different origin and broadcast
+		{
+			when(context.containsBean(any())).thenReturn(true);
+			serverHostAddress = "55.55.55.55";
+			when(serverSettings.getHostAddress()).thenReturn(serverHostAddress);
+			
+			BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
+			MuxAdaptor muxAdaptor = Mockito.mock(MuxAdaptor.class);
+			
+			Mockito.doReturn(muxAdaptor).when(restServiceSpy).getMuxAdaptor(broadcast.getStreamId());
+			
+			Mockito.when(muxAdaptor.startRtmpStreaming(Mockito.anyString())).thenReturn(true);
+			
+			Endpoint endpoint5 = new Endpoint();
+			endpoint5.setRtmpUrl("rtmp://test.endpoint.url/any_stream_test");
+			
+			store.updateStatus(broadcast.getStreamId(), AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+			assertFalse(restServiceSpy.addEndpointV3(streamId, endpoint5).isSuccess());
+			
+		}
+		
+		{
+			Endpoint endpoint6 = new Endpoint();
+			endpoint6.setRtmpUrl("rtmp://test.endpoint.url/any_stream_test");
+			
+			assertFalse(restServiceReal.addEndpointV3("Not_regsitered_stream_id", endpoint6).isSuccess());
+		}
+
 	}
 
 
@@ -904,14 +1112,14 @@ public class BroadcastRestServiceV2UnitTest {
 			String type = "type"  + (int)(Math.random() * 10000);
 
 			when(videoServiceEndpoint.createBroadcast(broadcastCreated.getName(), broadcastCreated.getDescription(), 
-					broadcastCreated.getStreamId(), broadcastCreated.isIs360(), broadcastCreated.isPublicStream(), 720, true))
+					broadcastCreated.getStreamId(), broadcastCreated.isIs360(), broadcastCreated.isPublicStream(), 2160, true))
 			.thenReturn(new Endpoint(broadcastId, streamId, name, rtmpUrl, type, endpointServiceId, broadcastCreated.getStreamId()));
 
 			result = restServiceReal.addSocialEndpointJSONV2(broadcastCreated.getStreamId(), endpointServiceId);
 			assertTrue(result.isSuccess());
 
 			Mockito.verify(videoServiceEndpoint).createBroadcast(broadcastCreated.getName(), broadcastCreated.getDescription(),
-					broadcastCreated.getStreamId(), broadcastCreated.isIs360(), broadcastCreated.isPublicStream(), 720, true);
+					broadcastCreated.getStreamId(), broadcastCreated.isIs360(), broadcastCreated.isPublicStream(), 2160, true);
 		} catch (Exception e) {
 			e.printStackTrace();
 			fail(e.getMessage());
@@ -1106,7 +1314,7 @@ public class BroadcastRestServiceV2UnitTest {
 			assertNotNull(broadcast2.getStreamId());
 		}
 
-		List<Broadcast> broadcastList = restServiceReal.getBroadcastList(0, 20);
+		List<Broadcast> broadcastList = restServiceReal.getBroadcastList(0, 20, null, null, null, null);
 		assertEquals(streamCount, broadcastList.size());
 
 		for (Broadcast item: broadcastList) {
@@ -1123,7 +1331,10 @@ public class BroadcastRestServiceV2UnitTest {
 	public void testGetVersion() {
 		RootRestService rootRestService = new RootRestService();
 		Version version = rootRestService.getVersion();
+		System.out.println("VersionName " + version.getVersionName());
+		System.out.println("Expected VersionName " + AntMediaApplicationAdapter.class.getPackage().getImplementationVersion());
 		assertEquals(version.getVersionName(), AntMediaApplicationAdapter.class.getPackage().getImplementationVersion());
+		System.out.println("VersionType " + version.getVersionType());
 		assertEquals(RestServiceBase.COMMUNITY_EDITION, version.getVersionType());
 	}
 
@@ -1229,6 +1440,48 @@ public class BroadcastRestServiceV2UnitTest {
 		assertEquals(Status.BAD_REQUEST.getStatusCode(), response.getStatus());
 
 	}
+	
+	
+	@Test
+	public void testRecordFails() {
+		AppSettings settings = mock(AppSettings.class);
+		when(settings.getListenerHookURL()).thenReturn(null);
+		restServiceReal.setAppSettings(settings);
+		
+		Scope scope = mock(Scope.class);
+		String scopeName = "scope";
+		when(scope.getName()).thenReturn(scopeName);
+
+		restServiceReal.setScope(scope);
+		
+		Broadcast broadcast = new Broadcast(null, "name");
+		DataStore store = new InMemoryDataStore("testdb");
+		restServiceReal.setDataStore(store);
+		
+		ServerSettings serverSettings = Mockito.mock(ServerSettings.class);
+		restServiceReal.setServerSettings(serverSettings);
+		
+		broadcast.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+		store.save(broadcast);
+
+		Result result = restServiceReal.enableMp4Muxing(broadcast.getStreamId(), true);
+		assertFalse(result.isSuccess());
+		
+		result = restServiceReal.enableMp4Muxing(broadcast.getStreamId(), false);
+		assertFalse(result.isSuccess());
+		
+		
+		Broadcast broadcast2 = new Broadcast(null, "name");
+		broadcast2.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+		store.save(broadcast2);
+		
+		result = restServiceReal.enableWebMMuxing(broadcast2.getStreamId(), true);
+		assertFalse(result.isSuccess());
+		
+		result = restServiceReal.enableWebMMuxing(broadcast2.getStreamId(), false);
+		assertFalse(result.isSuccess());
+		
+	}
 
 	@Test
 	public void testAllInOne() {
@@ -1313,11 +1566,11 @@ public class BroadcastRestServiceV2UnitTest {
 		assertTrue(restServiceReal.enableMp4Muxing(testBroadcast.getStreamId(), true).isSuccess());
 
 		//check that setting is saved correctly
-		assertEquals(MuxAdaptor.MP4_ENABLED_FOR_STREAM, ((Broadcast)restServiceReal.getBroadcast(testBroadcast.getStreamId()).getEntity()).getMp4Enabled());
-
-
+		assertEquals(MuxAdaptor.RECORDING_ENABLED_FOR_STREAM, ((Broadcast)restServiceReal.getBroadcast(testBroadcast.getStreamId()).getEntity()).getMp4Enabled());
 
 	}
+	
+	
 
 	@Test
     public void testEnableMp4Muxing() throws Exception 
@@ -1351,9 +1604,9 @@ public class BroadcastRestServiceV2UnitTest {
         MuxAdaptor mockMuxAdaptor = Mockito.mock(MuxAdaptor.class);
         when(mockMuxAdaptor.getMuxerList()).thenReturn(mockMuxers);
         
-        when(mockMuxAdaptor.startRecording()).thenReturn(true);
+        when(mockMuxAdaptor.startRecording(RecordType.MP4)).thenReturn(true);
         
-        when(mockMuxAdaptor.stopRecording()).thenReturn(true);
+        when(mockMuxAdaptor.stopRecording(RecordType.MP4)).thenReturn(true);
 
         ArrayList<MuxAdaptor> mockMuxAdaptors = new ArrayList<>();
         mockMuxAdaptors.add(mockMuxAdaptor);
@@ -1367,7 +1620,7 @@ public class BroadcastRestServiceV2UnitTest {
 
         assertTrue(restServiceSpy.enableMp4Muxing(testBroadcast.getStreamId(), true).isSuccess());
 
-        verify(mockMuxAdaptor,never()).startRecording();
+        verify(mockMuxAdaptor,never()).startRecording(RecordType.MP4);
 
 		mockMuxers.clear();
 		mockMuxers.add(mockHLSMuxer);
@@ -1380,15 +1633,59 @@ public class BroadcastRestServiceV2UnitTest {
 		store.updateStatus(testBroadcast.getStreamId(), AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
 		
 		assertTrue(restServiceSpy.enableMp4Muxing(testBroadcast.getStreamId(), true).isSuccess());
-		verify(mockMuxAdaptor).startRecording();
+		verify(mockMuxAdaptor).startRecording(RecordType.MP4);
 
 		mockMuxers.add(mockMp4Muxer);
 
-        assertEquals(MuxAdaptor.MP4_ENABLED_FOR_STREAM, ((Broadcast)restServiceSpy.getBroadcast(testBroadcast.getStreamId()).getEntity()).getMp4Enabled());
+        assertEquals(MuxAdaptor.RECORDING_ENABLED_FOR_STREAM, ((Broadcast)restServiceSpy.getBroadcast(testBroadcast.getStreamId()).getEntity()).getMp4Enabled());
 
         assertTrue(restServiceSpy.enableMp4Muxing(testBroadcast.getStreamId(), false).isSuccess());
-        verify(mockMuxAdaptor).stopRecording();
+        verify(mockMuxAdaptor).stopRecording(RecordType.MP4);
     }
+	
+	@Test
+    public void testEnableWebMMuxing() throws Exception 
+	{
+		final String scopeValue = "scope";
+        
+        BroadcastRestService restServiceSpy = Mockito.spy(new BroadcastRestService());
+		AppSettings settings = mock(AppSettings.class);
+		when(settings.getListenerHookURL()).thenReturn(null);
+		restServiceSpy.setAppSettings(settings);
+
+		ServerSettings serverSettings = Mockito.mock(ServerSettings.class);
+		restServiceSpy.setServerSettings(serverSettings);
+		
+		Scope scope = mock(Scope.class);
+		when(scope.getName()).thenReturn(scopeValue);
+
+		restServiceSpy.setScope(scope);
+
+		DataStore store = new InMemoryDataStore("test");
+		restServiceSpy.setDataStore(store);
+
+        Response response = restServiceSpy.createBroadcast(new Broadcast("test"), null, false);
+        Broadcast testBroadcast = (Broadcast) response.getEntity();
+        testBroadcast.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+        String streamId = testBroadcast.getStreamId();
+        
+        MuxAdaptor mockMuxAdaptor = Mockito.mock(MuxAdaptor.class);
+        doReturn(mockMuxAdaptor).when(restServiceSpy).getMuxAdaptor(streamId);
+        doReturn(true).when(mockMuxAdaptor).startRecording(RecordType.WEBM);
+        when(mockMuxAdaptor.getStreamId()).thenReturn(streamId);
+
+
+        Result result=restServiceSpy.enableWebMMuxing(streamId, true);
+        assertTrue(result.isSuccess());
+        assertNotNull(result.getMessage());
+        verify(mockMuxAdaptor, times(1)).startRecording(RecordType.WEBM);
+        assertEquals(MuxAdaptor.RECORDING_ENABLED_FOR_STREAM, store.get(streamId).getWebMEnabled());
+        
+        //disable
+		restServiceSpy.enableWebMMuxing(streamId, false).isSuccess();
+        verify(mockMuxAdaptor, times(1)).stopRecording(RecordType.WEBM);
+        assertEquals(MuxAdaptor.RECORDING_DISABLED_FOR_STREAM, store.get(streamId).getWebMEnabled());
+	}
 
 	@Test
 	public void testTokenOperations() {
@@ -1829,10 +2126,52 @@ public class BroadcastRestServiceV2UnitTest {
 
 		//it should not null because discovery is performed
 		assertNotNull(result);
-
+		
+		//*****************************************************************************
+		//*****************************************************************************
+		//          PAY ATTENTION
+		//TODO: We should enable below assertion to make sure onvif discovery works 
+		//however there is a problem in CI. We need to check it on a linux box later. 
+		//assertEquals(1, result.length);
+		//*****************************************************************************
+		//*****************************************************************************
+		
+		
 		//stop camera emulator
 		StreamFetcherUnitTest.stopCameraEmulator();
 
+	}
+	
+	@Test
+	public void testGetIPArray() {
+		
+		BroadcastRestService streamSourceRest = Mockito.spy(restServiceReal);
+		String[] ipArray = streamSourceRest.getIPArray(null);
+		assertNull(ipArray);
+		ipArray = streamSourceRest.getIPArray(new ArrayList<URL>());
+		assertNotNull(ipArray);
+
+		try {
+			ipArray = streamSourceRest.getIPArray(Arrays.asList(new URL("http://192.168.3.23:8080/onvif/devices")));
+			assertEquals(1, ipArray.length);
+		} catch (MalformedURLException e) {
+		
+			e.printStackTrace();
+			fail(e.getMessage());
+		}
+	}
+	
+	@Test
+	public void testDeviceDiscovery() {
+		ExecutorService executor = Executors.newSingleThreadExecutor();
+		int randomPort = (int)(Math.random()*5000) + 1024;
+		int result = DeviceDiscovery.tryAddress(null, null, null, null, executor, randomPort, null);
+		assertEquals(randomPort, result);
+		
+		result = DeviceDiscovery.tryAddress(null, null, null, null, executor, randomPort, null);
+		assertEquals(-1, result);
+		
+		executor.shutdown();
 	}
 
 	@Test
@@ -1881,6 +2220,24 @@ public class BroadcastRestServiceV2UnitTest {
 	}
 	
 	@Test
+	public void testcheckStopStreaming() 
+	{
+		BroadcastRestService streamSourceRest = Mockito.spy(restServiceReal);
+		AntMediaApplicationAdapter adaptor = mock (AntMediaApplicationAdapter.class);
+		Mockito.doReturn(adaptor).when(streamSourceRest).getApplication();
+		Mockito.when(adaptor.getStreamFetcherManager()).thenReturn(mock(StreamFetcherManager.class));
+		Mockito.when(adaptor.stopStreaming(any())).thenReturn(new Result(false));
+		
+		Broadcast broadcast = new Broadcast();
+		//It means there is no stream to stop
+		assertTrue(streamSourceRest.checkStopStreaming(broadcast));
+		
+		broadcast.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+		//it should return false because adaptor return false
+		assertFalse(streamSourceRest.checkStopStreaming(broadcast));
+	}
+	
+	@Test
 	public void updateStreamSource() {
 
 		Result result = new Result(false);
@@ -1909,7 +2266,7 @@ public class BroadcastRestServiceV2UnitTest {
 		
 		streamSource.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
 		
-		StreamFetcher fetcher = mock (StreamFetcher.class);
+		StreamFetcher fetcher = mock(StreamFetcher.class);
 		
 		try {
 			streamSource.setStreamId("selimTest");
@@ -1930,14 +2287,14 @@ public class BroadcastRestServiceV2UnitTest {
 		
 		Mockito.doReturn(true).when(streamSourceRest).checkStreamUrl(any());
 		
-		Mockito.doReturn(true).when(streamSourceRest).checkStopStreaming(any(),any());
+		Mockito.doReturn(true).when(streamSourceRest).checkStopStreaming(any());
 		
 		result = streamSourceRest.updateBroadcast(streamSource.getStreamId(), streamSource,socialNetworksToPublish);
 		
 		assertEquals(true, result.isSuccess());
 		
 		Awaitility.await().atMost(22*250, TimeUnit.MILLISECONDS)
-		.until(() -> streamSourceRest.waitStopStreaming(streamSource.getStreamId(),false));
+		.until(() -> streamSourceRest.waitStopStreaming(streamSource,false));
 		
 		// Test line 392 if condition
 
@@ -1955,7 +2312,12 @@ public class BroadcastRestServiceV2UnitTest {
 		
 		result = streamSourceRest.updateBroadcast(streamSource.getStreamId(), streamSource,"endpoint_1");
 		
+		assertEquals(true, result.isSuccess());
+		
+		result = streamSourceRest.updateBroadcast("not_exists" + (int)(Math.random()*10000), streamSource,"endpoint_1");
+		
 		assertEquals(false, result.isSuccess());
+
 		
 	}
 	
@@ -1988,6 +2350,9 @@ public class BroadcastRestServiceV2UnitTest {
 		Mockito.doReturn(adaptor).when(streamSourceRest).getApplication();
 		Mockito.doReturn(fetcher).when(adaptor).startStreaming(newCam);
 		Mockito.doReturn(store).when(streamSourceRest).getDataStore();
+		StreamFetcherManager sfm = mock (StreamFetcherManager.class);
+		Mockito.doReturn(sfm).when(adaptor).getStreamFetcherManager();
+		Mockito.doReturn(false).when(sfm).checkAlreadyFetch(any());
 
 		store.save(newCam);
 
@@ -2019,6 +2384,9 @@ public class BroadcastRestServiceV2UnitTest {
 		Mockito.doReturn(videoServiceEndpoints).when(adaptor).getVideoServiceEndpoints();
 		StreamFetcher fetcher = mock (StreamFetcher.class);
 		Mockito.doReturn(fetcher).when(adaptor).startStreaming(source);
+		StreamFetcherManager sfm = mock (StreamFetcherManager.class);
+		Mockito.doReturn(sfm).when(adaptor).getStreamFetcherManager();
+		Mockito.doReturn(false).when(sfm).checkAlreadyFetch(any());
 		
 		Mockito.doReturn(new ServerSettings()).when(streamSourceRest).getServerSettings();
 		Mockito.doReturn(new AppSettings()).when(streamSourceRest).getAppSettings();
@@ -2101,7 +2469,7 @@ public class BroadcastRestServiceV2UnitTest {
 		restServiceReal.setAppCtx(context);
 		restServiceReal.setApplication(app);
 		restServiceReal.setScope(scope);
-		assertTrue(restServiceReal.getRTMPToWebRTCStats().isEmpty());
+		assertNotNull(restServiceReal.getRTMPToWebRTCStats("stream1"));
 	}
 	
 	@Test
@@ -2187,6 +2555,188 @@ public class BroadcastRestServiceV2UnitTest {
 		assertEquals(0, streamInfo2.length);
 		
 		
+	}
+	
+	@Test
+	public void testSendMessage()  {
+		Scope scope = mock(Scope.class);
+		String scopeName = "scope";
+		when(scope.getName()).thenReturn(scopeName);
+		
+		String streamId = "stream1";
+		String message = "hi";
+		
+		// test the case of data channels not enabled
+		AntMediaApplicationAdapter app = new AntMediaApplicationAdapter();
+		AntMediaApplicationAdapter appSpy = Mockito.spy(app);
+
+		ApplicationContext context = mock(ApplicationContext.class);
+
+		restServiceReal.setAppCtx(context);
+		restServiceReal.setApplication(appSpy);
+		restServiceReal.setScope(scope);
+		
+		Result res = restServiceReal.sendMessage(message,streamId);
+		assertEquals(false, res.isSuccess());
+		
+		// test the case of data channels not enabled
+		AntMediaApplicationAdapter app2 = new AntMediaApplicationAdapter();
+		AntMediaApplicationAdapter appSpy2 = Mockito.spy(app2);
+		Mockito.doReturn(true).when(appSpy2).isDataChannelMessagingSupported();
+		restServiceReal.setApplication(appSpy2);
+		
+		res = restServiceReal.sendMessage(message,streamId);
+		assertEquals(false, res.isSuccess());
+		assertEquals("Data channels are not enabled", res.getMessage());
+		
+		AntMediaApplicationAdapter app3 = new AntMediaApplicationAdapter();
+		AntMediaApplicationAdapter appSpy3 = Mockito.spy(app3);
+		Mockito.doReturn(true).when(appSpy3).isDataChannelMessagingSupported();
+		Mockito.doReturn(true).when(appSpy3).isDataChannelEnabled();
+		
+		restServiceReal.setApplication(appSpy3);
+		
+		res = restServiceReal.sendMessage(message,streamId);
+		assertEquals(false, res.isSuccess());
+		assertEquals("Requested WebRTC stream does not exist", res.getMessage());
+		
+		AntMediaApplicationAdapter app4 = new AntMediaApplicationAdapter();
+		AntMediaApplicationAdapter appSpy4 = Mockito.spy(app4);
+		Mockito.doReturn(true).when(appSpy4).isDataChannelMessagingSupported();
+		Mockito.doReturn(true).when(appSpy4).isDataChannelEnabled();
+		Mockito.doReturn(true).when(appSpy4).doesWebRTCStreamExist(streamId);
+		
+		restServiceReal.setApplication(appSpy4);
+	    
+		res = restServiceReal.sendMessage(message,streamId);
+		
+		// check if returned result is true
+		assertEquals(false, res.isSuccess());
+		assertEquals("Operation not completed", res.getMessage());
+		
+	}
+
+
+
+	@Test
+	public void testGetRoomInfo()  {
+		ApplicationContext context = mock(ApplicationContext.class);
+		restServiceReal.setAppCtx(context);
+		DataStore store = new InMemoryDataStore("testdb");
+		restServiceReal.setDataStore(store);
+		BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
+		ConferenceRoom room=new ConferenceRoom();
+		room.setRoomId("testroom");
+		Broadcast broadcast1=new Broadcast();
+		Broadcast broadcast2=new Broadcast();
+		try {
+			broadcast1.setStreamId("stream1");
+			broadcast1.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+			broadcast2.setStreamId("stream2");
+			broadcast2.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		store.save(broadcast1);
+		store.save(broadcast2);
+		List<String> streamIdList=new ArrayList<>();
+		streamIdList.add("stream1");
+		streamIdList.add("stream2");
+		room.setRoomStreamList(streamIdList);
+		store.createConferenceRoom(room);
+		//If the stream id is provided in the list, it won't return that stream id. This is query parameter in the rest.
+		RootRestService.RoomInfo testroom=restServiceSpy.getRoomInfo("testroom","stream1");
+		assertEquals("testroom",testroom.getRoomId());
+		assertEquals(1,testroom.getStreamIds().size());
+		testroom=restServiceSpy.getRoomInfo("testroom","stream3");
+		assertEquals("testroom",testroom.getRoomId());
+		assertEquals(2,testroom.getStreamIds().size());
+		testroom=restServiceSpy.getRoomInfo("someunknownroom","stream1");
+		//Even though room is not defined yet, it will not return null.
+		assertNotNull(testroom);
+		assertEquals("someunknownroom",testroom.getRoomId());
+		testroom=restServiceSpy.getRoomInfo(null,"stream1");
+		assertNull(null,testroom.getRoomId());
+	}
+
+	@Test
+	public void testaddStreamToTheRoom(){
+		ApplicationContext currentcontext = mock(ApplicationContext.class);
+		restServiceReal.setAppCtx(currentcontext);
+		DataStore store = new InMemoryDataStore("testdb");
+		restServiceReal.setDataStore(store);
+		BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
+		ConferenceRoom room=new ConferenceRoom();
+		room.setRoomId("testroom");
+		store.createConferenceRoom(room);
+		Broadcast broadcast1=new Broadcast();
+		Broadcast broadcast2=new Broadcast();
+		Broadcast broadcast3=new Broadcast();
+		Broadcast broadcast4=new Broadcast();
+		try {
+			broadcast1.setStreamId("stream1");
+			broadcast1.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+			broadcast2.setStreamId("stream2");
+			broadcast2.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+			broadcast3.setStreamId("stream3");
+			broadcast3.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+			broadcast4.setStreamId("stream4");
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		store.save(broadcast1);
+		store.save(broadcast2);
+		store.save(broadcast3);
+		store.save(broadcast4);
+		restServiceSpy.addStreamToTheRoom("testroom","stream1");
+		assertEquals(1,store.getConferenceRoom("testroom").getRoomStreamList().size());
+		restServiceSpy.addStreamToTheRoom("testroom","stream2");
+		assertEquals(2,store.getConferenceRoom("testroom").getRoomStreamList().size());
+		restServiceSpy.addStreamToTheRoom(null,"stream3");
+		assertEquals(2,store.getConferenceRoom("testroom").getRoomStreamList().size());
+		restServiceSpy.addStreamToTheRoom("someunknownroom","stream3");
+		assertEquals(2,store.getConferenceRoom("testroom").getRoomStreamList().size());
+		restServiceSpy.addStreamToTheRoom("testroom","stream4");
+		assertEquals(2,store.getConferenceRoom("testroom").getRoomStreamList().size());
+	}
+
+	@Test
+	public void testremoveStreamFromRoom(){
+		ApplicationContext currentcontext = mock(ApplicationContext.class);
+		restServiceReal.setAppCtx(currentcontext);
+		DataStore store = new InMemoryDataStore("testdb");
+		restServiceReal.setDataStore(store);
+		BroadcastRestService restServiceSpy = Mockito.spy(restServiceReal);
+		ConferenceRoom room=new ConferenceRoom();
+		room.setRoomId("testroom");
+		Broadcast broadcast1=new Broadcast();
+		Broadcast broadcast2=new Broadcast();
+		try {
+			broadcast1.setStreamId("stream1");
+			broadcast1.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+			broadcast2.setStreamId("stream2");
+			broadcast2.setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		store.save(broadcast1);
+		store.save(broadcast2);
+		List<String> streamIdList=new ArrayList<>();
+		streamIdList.add("stream1");
+		streamIdList.add("stream2");
+		room.setRoomStreamList(streamIdList);
+		store.createConferenceRoom(room);
+		assertEquals(2,store.getConferenceRoom("testroom").getRoomStreamList().size());
+		restServiceSpy.deleteStreamFromTheRoom("testroom","stream2");
+		assertEquals(1,store.getConferenceRoom("testroom").getRoomStreamList().size());
+		restServiceSpy.deleteStreamFromTheRoom(null,"stream2");
+		assertEquals(1,store.getConferenceRoom("testroom").getRoomStreamList().size());
+		restServiceSpy.deleteStreamFromTheRoom("testroom","someunknownstream");
+		assertEquals(1,store.getConferenceRoom("testroom").getRoomStreamList().size());
+		restServiceSpy.deleteStreamFromTheRoom("someunknownroom","stream1");
+		assertEquals(1,store.getConferenceRoom("testroom").getRoomStreamList().size());
+		restServiceSpy.deleteStreamFromTheRoom("testroom","stream1");
+		assertEquals(0,store.getConferenceRoom("testroom").getRoomStreamList().size());
 	}
 	
 }

@@ -13,7 +13,7 @@ import java.util.List;
 
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.exception.ExceptionUtils;
-import org.mongodb.morphia.annotations.NotSaved;
+import org.bytedeco.ffmpeg.global.avutil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
@@ -21,24 +21,39 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.apache.catalina.util.NetMask;
+import org.webrtc.Logging;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 @JsonIgnoreProperties(ignoreUnknown=true)
 public class ServerSettings implements ApplicationContextAware {
-	
+
 	public static final String BEAN_NAME = "ant.media.server.settings";
 
-	
+
 	private static final String SETTINGS_HEART_BEAT_ENABLED = "server.heartbeatEnabled";
-	
+
+
 	private static final String SETTINGS_USE_GLOBAL_IP = "useGlobalIp";
+
+	private static final String SETTINGS_NODE_GROUP = "nodeGroup";
+
 	
+	public static final String LOG_LEVEL_ALL = "ALL";
+	public static final String LOG_LEVEL_TRACE = "TRACE";
+	public static final String LOG_LEVEL_DEBUG = "DEBUG";
+	public static final String LOG_LEVEL_INFO = "INFO";
+	public static final String LOG_LEVEL_WARN = "WARN";
+	public static final String LOG_LEVEL_ERROR = "ERROR";
+	public static final String LOG_LEVEL_OFF = "OFF";
+	
+	public static final String DEFAULT_NODE_GROUP = "default";
+
+
 	private String allowedDashboardCIDR;
 
 	@JsonIgnore
-	@NotSaved
 	private List<NetMask> allowedCIDRList = new ArrayList<>();
 
 	
@@ -67,12 +82,23 @@ public class ServerSettings implements ApplicationContextAware {
 	
 	
 	private String logLevel = null;
-	
+
+	/**
+	 * Native Log Level is used for ffmpeg and WebRTC logs
+	 */
+	private String nativeLogLevel = LOG_LEVEL_WARN;
+
 	@Value( "${"+SETTINGS_HEART_BEAT_ENABLED+":true}" )
 	private boolean heartbeatEnabled; 
-	
+
 	@Value( "${"+SETTINGS_USE_GLOBAL_IP+":false}" )
 	private boolean useGlobalIp;
+
+	
+	@Value( "${"+SETTINGS_NODE_GROUP+":"+DEFAULT_NODE_GROUP+"}" )
+	private String nodeGroup = DEFAULT_NODE_GROUP;
+
+	private Logging.Severity webrtcLogLevel = Logging.Severity.LS_WARNING;
 
 	public boolean isBuildForMarket() {
 		return buildForMarket;
@@ -98,7 +124,7 @@ public class ServerSettings implements ApplicationContextAware {
 		this.serverName = serverName;
 	}
 
- 	public String getLogLevel() {
+	public String getLogLevel() {
 		return logLevel;
 	}
 	public void setLogLevel(String logLevel) {
@@ -112,7 +138,7 @@ public class ServerSettings implements ApplicationContextAware {
 	public void setHeartbeatEnabled(boolean heartbeatEnabled) {
 		this.heartbeatEnabled = heartbeatEnabled;
 	}
-	
+
 	public  String getHostAddress() {
 		if (hostAddress == null ) {
 			//which means that context is not initialized yet so that return localhost address
@@ -121,9 +147,9 @@ public class ServerSettings implements ApplicationContextAware {
 		}
 		return hostAddress;
 	}
-	
+
 	public static String getGlobalHostAddress(){
-		
+
 		if (globalHostAddress == null) {
 			InputStream in = null;
 			try {
@@ -237,6 +263,59 @@ public class ServerSettings implements ApplicationContextAware {
 		}
 
 		return Collections.unmodifiableList(messages);
+	}
+
+	public String getNativeLogLevel() {
+		return nativeLogLevel;
+	}
+
+	public void setNativeLogLevel(String nativeLogLevel) {
+		this.nativeLogLevel = nativeLogLevel;
+		switch (this.nativeLogLevel) 
+		{
+			case LOG_LEVEL_ALL:
+			case LOG_LEVEL_TRACE:
+				webrtcLogLevel = Logging.Severity.LS_VERBOSE;
+				avutil.av_log_set_level(avutil.AV_LOG_TRACE);			
+				break;
+			case LOG_LEVEL_DEBUG:
+				webrtcLogLevel = Logging.Severity.LS_VERBOSE;
+				avutil.av_log_set_level(avutil.AV_LOG_DEBUG);
+				break;
+			case LOG_LEVEL_INFO:
+				webrtcLogLevel = Logging.Severity.LS_INFO;
+				avutil.av_log_set_level(avutil.AV_LOG_INFO);
+				break;
+			case LOG_LEVEL_WARN:
+				webrtcLogLevel = Logging.Severity.LS_WARNING;
+				avutil.av_log_set_level(avutil.AV_LOG_WARNING);
+				break;
+			case LOG_LEVEL_ERROR:
+				webrtcLogLevel = Logging.Severity.LS_ERROR;
+				avutil.av_log_set_level(avutil.AV_LOG_ERROR);
+				break;
+			case LOG_LEVEL_OFF:
+				webrtcLogLevel = Logging.Severity.LS_NONE;
+				avutil.av_log_set_level(avutil.AV_LOG_QUIET);
+				break;
+			default:
+				this.nativeLogLevel = LOG_LEVEL_WARN;
+				webrtcLogLevel = Logging.Severity.LS_WARNING;
+				avutil.av_log_set_level(avutil.AV_LOG_WARNING);
+		}
+
+	}
+	
+	public Logging.Severity getWebRTCLogLevel() {
+		return webrtcLogLevel;
+	}
+
+	public String getNodeGroup() {
+		return nodeGroup;
+	}
+
+	public void setNodeGroup(String nodeGroup) {
+		this.nodeGroup = nodeGroup;
 	}
 
 }

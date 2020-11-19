@@ -8,6 +8,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -42,6 +43,8 @@ public class InMemoryDataStore extends DataStore {
 	private Map<String, Playlist> playlistMap = new LinkedHashMap<>();
 
 	public InMemoryDataStore(String dbName) {
+		
+		available = true;
 	}
 
 	@Override
@@ -91,8 +94,13 @@ public class InMemoryDataStore extends DataStore {
 		boolean result = false;
 		if (broadcast != null) {
 			broadcast.setStatus(status);
-			if(status.contentEquals(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING)) {
+			if(status.equals(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING)) {
 				broadcast.setStartTime(System.currentTimeMillis());
+			}
+			else if(status.equals(AntMediaApplicationAdapter.BROADCAST_STATUS_FINISHED)) {
+				broadcast.setRtmpViewerCount(0);
+				broadcast.setWebRTCViewerCount(0);
+				broadcast.setHlsViewerCount(0);
 			}
 			broadcastMap.put(id, broadcast);
 			result = true;
@@ -182,39 +190,38 @@ public class InMemoryDataStore extends DataStore {
 		Broadcast broadcast = broadcastMap.get(id);
 		boolean result = false;
 		if (broadcast != null) {
-			broadcastMap.remove(id);
-			result = true;
+			result = broadcastMap.remove(id) != null ? true : false;
 		}
 		return result;
 	}
 
 	@Override
-	public List<Broadcast> getBroadcastList(int offset, int size) {
+	public List<Broadcast> getBroadcastList(int offset, int size, String type, String sortBy, String orderBy, String search) {
+		
 		Collection<Broadcast> values = broadcastMap.values();
-		int t = 0;
-		int itemCount = 0;
-		if (size > MAX_ITEM_IN_ONE_LIST) {
-			size = MAX_ITEM_IN_ONE_LIST;
-		}
-		if (offset < 0) {
-			offset = 0;
-		}
-		List<Broadcast> list = new ArrayList<>();
-		for (Broadcast broadcast : values) {
 
-			if (t < offset) {
-				t++;
-				continue;
+		ArrayList<Broadcast> list = new ArrayList<>();
+		
+		if(type != null && !type.isEmpty()) {
+			for (Broadcast broadcast : values) 
+			{
+				if(type.equals(broadcast.getType())) 
+				{
+					list.add(broadcast);
+				}
 			}
-			list.add(broadcast);
-			itemCount++;
-
-			if (itemCount >= size) {
-				break;
-			}
-
 		}
-		return list;
+		else {
+			for (Broadcast broadcast : values) 
+			{
+				list.add(broadcast);
+			}
+		}
+		if(search != null && !search.isEmpty()){
+			logger.info("server side search called for String = {}", search);
+			list = searchOnServer(list, search);
+		}
+		return sortAndCropBroadcastList(list, offset, size, sortBy, orderBy);
 	}
 
 
@@ -238,41 +245,7 @@ public class InMemoryDataStore extends DataStore {
 	@Override
 	public void close() {
 		//no need to implement 
-	}
-
-	@Override
-	public List<Broadcast> filterBroadcastList(int offset, int size, String type) {
-		int t = 0;
-		int itemCount = 0;
-		if (size > MAX_ITEM_IN_ONE_LIST) {
-			size = MAX_ITEM_IN_ONE_LIST;
-		}
-		if (offset < 0) {
-			offset = 0;
-		}
-
-		Collection<Broadcast> values =broadcastMap.values();
-
-		List<Broadcast> list = new ArrayList<>();
-
-		for (Broadcast broadcast : values) 
-		{
-			if(type.equals(broadcast.getType())) 
-			{
-				if (t < offset) {
-					t++;
-					continue;
-				}
-				list.add(broadcast);
-
-				itemCount++;
-
-				if (itemCount >= size) {
-					break;
-				}
-			}
-		}
-		return list;
+		available = false;
 	}
 
 	@Override
@@ -300,8 +273,26 @@ public class InMemoryDataStore extends DataStore {
 	}
 
 	@Override
-	public List<VoD> getVodList(int offset, int size, String sortBy, String orderBy) {
-		ArrayList<VoD> vods = new ArrayList<>(vodMap.values());
+	public List<VoD> getVodList(int offset, int size, String sortBy, String orderBy, String filterStreamId) 
+	{
+		ArrayList<VoD> vods = null;
+		
+		if (filterStreamId != null && !filterStreamId.isEmpty()) 
+		{
+			vods = new ArrayList<>();
+			
+			for (VoD vod : vodMap.values()) 
+			{
+				if(vod.getStreamId().equals(filterStreamId)) {
+					vods.add(vod);
+				}
+			}
+			
+		}
+		else {
+			vods = new ArrayList<>(vodMap.values());
+		}
+		
 		return sortAndCropVodList(vods, offset, size, sortBy, orderBy);
 	}
 
@@ -589,10 +580,11 @@ public class InMemoryDataStore extends DataStore {
 				else  {
 					webRTCViewerCount--;
 				}
-
-				broadcast.setWebRTCViewerCount(webRTCViewerCount);
-				broadcastMap.replace(streamId, broadcast);
-				result = true;
+				if(webRTCViewerCount >= 0) {
+					broadcast.setWebRTCViewerCount(webRTCViewerCount);
+					broadcastMap.replace(streamId, broadcast);
+					result = true;
+				}
 			}
 		}
 		return result;
@@ -611,10 +603,11 @@ public class InMemoryDataStore extends DataStore {
 				else  {
 					rtmpViewerCount--;
 				}
-
-				broadcast.setRtmpViewerCount(rtmpViewerCount);
-				broadcastMap.replace(streamId, broadcast);
-				result = true;
+				if(rtmpViewerCount >= 0) {
+					broadcast.setRtmpViewerCount(rtmpViewerCount);
+					broadcastMap.replace(streamId, broadcast);
+					result = true;
+				}
 			}
 		}
 		return result;
@@ -742,8 +735,24 @@ public class InMemoryDataStore extends DataStore {
 
 		if (streamId != null) {
 			Broadcast broadcast = broadcastMap.get(streamId);
-			if (broadcast != null && (enabled == MuxAdaptor.MP4_ENABLED_FOR_STREAM || enabled == MuxAdaptor.MP4_NO_SET_FOR_STREAM || enabled == MuxAdaptor.MP4_DISABLED_FOR_STREAM)) {
+			if (broadcast != null && (enabled == MuxAdaptor.RECORDING_ENABLED_FOR_STREAM || enabled == MuxAdaptor.RECORDING_NO_SET_FOR_STREAM || enabled == MuxAdaptor.RECORDING_DISABLED_FOR_STREAM)) {
 				broadcast.setMp4Enabled(enabled);
+				broadcastMap.replace(streamId, broadcast);
+				result = true;
+			}
+		}
+
+		return result;
+	}
+	
+	@Override
+	public boolean setWebMMuxing(String streamId, int enabled) {
+		boolean result = false;
+
+		if (streamId != null) {
+			Broadcast broadcast = broadcastMap.get(streamId);
+			if (broadcast != null && (enabled == MuxAdaptor.RECORDING_ENABLED_FOR_STREAM || enabled == MuxAdaptor.RECORDING_NO_SET_FOR_STREAM || enabled == MuxAdaptor.RECORDING_DISABLED_FOR_STREAM)) {
+				broadcast.setWebMEnabled(enabled);
 				broadcastMap.replace(streamId, broadcast);
 				result = true;
 			}
@@ -776,8 +785,7 @@ public class InMemoryDataStore extends DataStore {
 		boolean result = false;
 
 		if (room != null && room.getRoomId() != null) {
-			roomMap.replace(roomId, room);
-			result = true;
+			return roomMap.replace(roomId, room) != null;
 		}
 		return result;
 	}
@@ -881,5 +889,45 @@ public class InMemoryDataStore extends DataStore {
 		}
 		return result;
 	}
-	
+  
+	@Override
+	public int resetBroadcasts(String hostAddress) {
+		Set<Entry<String,Broadcast>> entrySet = broadcastMap.entrySet();
+		
+		Iterator<Entry<String, Broadcast>> iterator = entrySet.iterator();
+		int i = 0;
+		while (iterator.hasNext()) {
+			Entry<String, Broadcast> next = iterator.next();
+			if (next.getValue().isZombi()) {
+				iterator.remove();
+				i++;
+			}
+			if (next.getValue().getStatus().equals(AntMediaApplicationAdapter.BROADCAST_STATUS_BROADCASTING) ||
+					next.getValue().getStatus().equals(AntMediaApplicationAdapter.BROADCAST_STATUS_PREPARING))
+			{
+				next.getValue().setStatus(AntMediaApplicationAdapter.BROADCAST_STATUS_FINISHED);
+				next.getValue().setWebRTCViewerCount(0);
+				next.getValue().setHlsViewerCount(0);
+				next.getValue().setRtmpViewerCount(0);
+				i++;
+			}
+		}
+		
+		
+		return i;
+	}
+
+	@Override
+	public int getTotalWebRTCViewersCount() {
+		long now = System.currentTimeMillis();
+		if(now - totalWebRTCViewerCountLastUpdateTime > TOTAL_WEBRTC_VIEWER_COUNT_CACHE_TIME) {
+			int total = 0;
+			for (Broadcast broadcast : broadcastMap.values()) {
+				total += broadcast.getWebRTCViewerCount();
+			}
+			totalWebRTCViewerCount = total;
+			totalWebRTCViewerCountLastUpdateTime = now;
+		}  
+		return totalWebRTCViewerCount;
+	}
 }

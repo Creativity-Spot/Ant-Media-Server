@@ -3,8 +3,8 @@ package io.antmedia.test;
 import java.io.File;
 import java.util.List;
 
-import org.bytedeco.javacpp.avcodec.AVPacket;
-import org.bytedeco.javacpp.avformat.AVFormatContext;
+import org.bytedeco.ffmpeg.avcodec.AVPacket;
+import org.bytedeco.ffmpeg.avformat.AVFormatContext;
 import org.red5.server.adapter.MultiThreadedApplicationAdapter;
 import org.red5.server.api.scope.IScope;
 import org.red5.server.api.stream.IStreamPublishSecurity;
@@ -156,8 +156,8 @@ public class Application extends MultiThreadedApplicationAdapter implements IAnt
 		this.streamAcceptFilter = streamAcceptFilter;
 	}
 
-	public boolean isValidStreamParameters(AVFormatContext inputFormatContext,AVPacket pkt) {
-		return streamAcceptFilter.isValidStreamParameters(inputFormatContext, pkt);
+	public boolean isValidStreamParameters(int width, int height, int fps, int bitrate, String streamId) {
+		return streamAcceptFilter.isValidStreamParameters(width, height, fps, bitrate, streamId);
 	}
 	
 	public void setServerSettings(ServerSettings serverSettings) {

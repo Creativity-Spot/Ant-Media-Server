@@ -3,7 +3,6 @@ package io.antmedia.filter;
 import java.io.IOException;
 
 import javax.servlet.FilterChain;
-import javax.servlet.FilterConfig;
 import javax.servlet.ServletException;
 import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
@@ -13,7 +12,7 @@ import javax.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationContext;
-import org.springframework.web.context.WebApplicationContext;
+import org.springframework.web.context.ConfigurableWebApplicationContext;
 
 import io.antmedia.AppSettings;
 import io.antmedia.datastore.db.types.Token;
@@ -30,8 +29,6 @@ public class TokenFilterManager extends AbstractFilter   {
 	@Override
 	public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
 			throws IOException, ServletException {
-
-		boolean result = false;
 		
 		HttpServletRequest httpRequest =(HttpServletRequest)request;
 		HttpServletResponse httpResponse = (HttpServletResponse)response;
@@ -49,6 +46,8 @@ public class TokenFilterManager extends AbstractFilter   {
 
 		
 		AppSettings appSettings = getAppSettings();
+		TokenGenerator tokenGenerator = getTokenGenerator();
+
 		if (appSettings == null) {
 			httpResponse.sendError(HttpServletResponse.SC_FORBIDDEN,"Server is getting initialized.");
 			logger.warn("AppSettings not initialized. Server is getting started for stream id:{} from request: {}", streamId, clientIP);
@@ -60,10 +59,17 @@ public class TokenFilterManager extends AbstractFilter   {
 				,httpRequest.getRequestURI(), tokenId, sessionId, streamId);
 
 
-		if ("GET".equals(method)) 
+		/*
+		 * In cluster mode edges make HLS request to Origin. Token isn't passed with this requests.
+		 * So if token enabled, origin returns 403. So we generate an cluster secret, store it in ClusterToken attribute
+		 * then check it here to bypass token control.
+		 */
+		String clusterToken = (String) request.getAttribute("ClusterToken");
+		if ("GET".equals(method) 
+				&& (tokenGenerator == null || clusterToken == null || !clusterToken.equals(tokenGenerator.getGenetaredToken()))) 
 		{
 			
-			if(appSettings.isTokenControlEnabled()) 
+			if(appSettings.isPlayTokenControlEnabled()) 
 			{
 				
 				ITokenService tokenServiceTmp = getTokenService();
@@ -104,6 +110,15 @@ public class TokenFilterManager extends AbstractFilter   {
 	
 		chain.doFilter(request, response);
 
+	}
+
+	private TokenGenerator getTokenGenerator() {
+		TokenGenerator tokenGenerator = null;
+		ConfigurableWebApplicationContext context = getAppContext();
+		if (context != null && context.containsBean(TokenGenerator.BEAN_NAME)) {
+			tokenGenerator = (TokenGenerator)context.getBean(TokenGenerator.BEAN_NAME);
+		}
+		return tokenGenerator;
 	}
 
 	public ITokenService getTokenService() {

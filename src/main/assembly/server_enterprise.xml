@@ -88,10 +88,18 @@
 				<!-- Below libs are generic we need custom builds which are under src/main/server/plugins 
 				and they will copied later in this file -->
 				<exclude>ffmpeg*linux-x86.jar</exclude>
+				<exclude>ffmpeg*linux-arm64.jar</exclude>
 				<exclude>ffmpeg*linux-armhf.jar</exclude> 
 				<exclude>ffmpeg*android*.jar</exclude>
 				<exclude>ffmpeg*ppc64le.jar</exclude>
 				<exclude>ffmpeg*windows*.jar</exclude>
+				<exclude>javacpp*android*.jar</exclude>
+				<exclude>javacpp*ios*.jar</exclude>
+				<exclude>javacpp*linux-x86.jar</exclude>
+				<exclude>javacpp*linux-arm64.jar</exclude>
+				<exclude>javacpp*linux-armhf.jar</exclude>
+				<exclude>javacpp*linux-ppc64le.jar</exclude>
+				<exclude>javacpp*windows*.jar</exclude>	
 				<exclude>cuda*ppc64le.jar</exclude>
 				<exclude>cuda*macosx*.jar</exclude>
 				<exclude>cuda*windows*.jar</exclude>
@@ -123,6 +131,7 @@
 				<include>*.globals</include>
 				<include>*.jmx</include>
 				<include>*.json</include>
+				<include>*.sh</include>
 			</includes>
 			<excludes>
 				<exclude>build_standalone.properties</exclude>
@@ -145,9 +154,7 @@
 			<directory>${project.basedir}/src/main/server/lib/native</directory>
 			<outputDirectory>lib/native</outputDirectory>
 			<includes>
-				<include>*.dylib</include>
-				<include>*.so</include>
-				<include>*.dll</include>
+				<include>*</include>
 			</includes>
 		</fileSet>
 		<fileSet>
@@ -190,6 +197,15 @@
 			<outputDirectory></outputDirectory>
 			<includes>
 				<include>*.war</include>
+			</includes>
+		</fileSet>
+
+		<!-- Readme File-->
+		<fileSet>
+			<directory>${project.basedir}</directory>
+			<outputDirectory></outputDirectory>
+			<includes>
+				<include>README.md</include>
 			</includes>
 		</fileSet>
 	</fileSets>

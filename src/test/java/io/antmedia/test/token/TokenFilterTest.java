@@ -30,13 +30,13 @@ import org.junit.runner.Description;
 import org.mockito.Mockito;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.ApplicationContext;
 import org.springframework.web.context.ConfigurableWebApplicationContext;
 import org.springframework.web.context.WebApplicationContext;
 
 import io.antmedia.AppSettings;
 import io.antmedia.datastore.db.types.Token;
 import io.antmedia.filter.TokenFilterManager;
+import io.antmedia.filter.TokenGenerator;
 import io.antmedia.muxer.MuxAdaptor;
 import io.antmedia.security.ITokenService;
 import io.antmedia.security.MockTokenService;
@@ -117,12 +117,9 @@ public class TokenFilterTest {
 			TokenFilterManager spyFilter = Mockito.spy(tokenFilter);
 			
 			AppSettings settings = new AppSettings();
-			settings.setTokenControlEnabled(true);
+			settings.setPlayTokenControlEnabled(true);
 			Mockito.doReturn(settings).when(spyFilter).getAppSettings();
 		
-		
-
-			
 			spyFilter.doFilter(mockRequest, mockResponse, mockChain);
 		
 		} catch (IOException e) {
@@ -147,8 +144,7 @@ public class TokenFilterTest {
 
 		MockTokenService tokenService = mock(MockTokenService.class);
 		AppSettings settings = new AppSettings();
-		settings.setTokenControlEnabled(true);
-
+		settings.setPlayTokenControlEnabled(true);
 
 		when(context.getBean(ITokenService.BeanName.TOKEN_SERVICE.toString())).thenReturn(tokenService);
 		when(context.getBean(AppSettings.BEAN_NAME)).thenReturn(settings);
@@ -218,9 +214,16 @@ public class TokenFilterTest {
 		streamId = "AgTWuHxp";
 		String requestURI = "/LiveApp/streams/"+ streamId + ".m3u8"; 
 		assertEquals(streamId, TokenFilterManager.getStreamId(requestURI));
+	}
+	
+	@Test
+	public void testTokenGenerator() {
+		TokenGenerator tg = new TokenGenerator();
+		
+		String t1 = tg.getGenetaredToken();
+		String t2 = tg.getGenetaredToken();
 
-
-
+		assertEquals(t1,  t2);
 	}
 
 
