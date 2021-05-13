@@ -47,7 +47,7 @@ public class WebSocketConstants {
 	public static final String PLAY_COMMAND = "play";
 
 	public static final String STOP_COMMAND = "stop";
-	
+
 	public static final String START_COMMAND = "start";
 	
 	public static final String PUBLISH_COMMAND = "publish";
@@ -369,5 +369,14 @@ public class WebSocketConstants {
 	 * It's send when community handler does not start streaming
 	 */
 	public static final String SERVER_ERROR_CHECK_LOGS = "server_error_check_logs";
+
+	/**
+	 * Free text info for the viewer
+	 */
+	public static final String VIEWER_INFO = "viewerInfo";
+	/**
+	 * It's send when license is suspended
+	 */
+	public static final String LICENCE_SUSPENDED = "license_suspended_please_renew_license";
 
 }

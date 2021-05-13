@@ -38,6 +38,8 @@ import org.springframework.context.ApplicationContext;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
+import io.antmedia.AntMediaApplicationAdapter;
+import io.antmedia.IApplicationAdaptorFactory;
 import io.antmedia.SystemUtils;
 import io.antmedia.muxer.IAntMediaStreamHandler;
 import io.antmedia.rest.WebRTCClientStats;
@@ -236,9 +238,7 @@ public class StatsCollectorTest {
 			return true;
 		});
 		
-		Mockito.verify(resMonitor, Mockito.times(1)).startAnalytic(Launcher.getVersion(), Launcher.getVersionType());
-				
-		Mockito.verify(resMonitor, Mockito.times(1)).startHeartBeats(Launcher.getVersion(), Launcher.getVersionType(), 3000);
+		Mockito.verify(resMonitor, Mockito.times(1)).startAnalytic();
 		
 		resMonitor.cancelHeartBeat();
 		
@@ -247,9 +247,7 @@ public class StatsCollectorTest {
 		resMonitor.setHeartBeatEnabled(false);
 		resMonitor.start();
 		assertFalse(resMonitor.isHeartBeatEnabled());
-		Mockito.verify(resMonitor, Mockito.times(1)).startAnalytic(Launcher.getVersion(), Launcher.getVersionType());
-				
-		Mockito.verify(resMonitor, Mockito.times(1)).startHeartBeats(Launcher.getVersion(), Launcher.getVersionType(), 3000);
+		Mockito.verify(resMonitor, Mockito.times(1)).startAnalytic();
 		
 		resMonitor.cancelHeartBeat();
 		
@@ -304,7 +302,7 @@ public class StatsCollectorTest {
 		resMonitor.setKafkaProducer(kafkaProducer);
 		
 		List<WebRTCClientStats> webRTCClientStatList = new ArrayList<>();
-		WebRTCClientStats stats = new WebRTCClientStats(100, 50, 40, 20, 60, 444, 9393838);
+		WebRTCClientStats stats = new WebRTCClientStats(100, 50, 40, 20, 60, 444, 9393838, "info");
 		webRTCClientStatList.add(stats);
 		resMonitor.sendWebRTCClientStats2Kafka(webRTCClientStatList, "stream1");
 		
@@ -360,7 +358,7 @@ public class StatsCollectorTest {
 		streams.add("stream1");
 		Mockito.when(webRTCAdaptor.getStreams()).thenReturn(streams);
 		List<WebRTCClientStats> webRTCClientStatList = new ArrayList<>();
-		WebRTCClientStats stats = new WebRTCClientStats(100, 50, 40, 20, 60, 444, 9393838);
+		WebRTCClientStats stats = new WebRTCClientStats(100, 50, 40, 20, 60, 444, 9393838, "info");
 		webRTCClientStatList.add(stats);
 		 
 		Mockito.when(webRTCAdaptor.getWebRTCClientStats(any())).thenReturn(webRTCClientStatList);
@@ -478,6 +476,25 @@ public class StatsCollectorTest {
 		
 		AVRational rational = new AVRational();
 		assertTrue( 0 != SystemUtils.osAvailableMemory());
+	}
+	
+	@Test
+	public void testGetAppAdaptor() 
+	{
+		ApplicationContext appContext = Mockito.mock(ApplicationContext.class);
+		assertNull(StatsCollector.getAppAdaptor(appContext));
+		
+		Mockito.when(appContext.containsBean(AntMediaApplicationAdapter.BEAN_NAME)).thenReturn(true);
+		Mockito.when(appContext.getBean(AntMediaApplicationAdapter.BEAN_NAME)).thenReturn(new Object());
+		assertNull(StatsCollector.getAppAdaptor(appContext));
+		
+		IApplicationAdaptorFactory appFactory = Mockito.mock(IApplicationAdaptorFactory.class);
+		AntMediaApplicationAdapter adaptor = Mockito.mock(AntMediaApplicationAdapter.class);
+		Mockito.when(appFactory.getAppAdaptor()).thenReturn(adaptor);
+		Mockito.when(appContext.getBean(AntMediaApplicationAdapter.BEAN_NAME)).thenReturn(appFactory);
+		assertEquals(adaptor, StatsCollector.getAppAdaptor(appContext));
+		
+		
 	}
 	
 }

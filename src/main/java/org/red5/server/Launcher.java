@@ -18,16 +18,12 @@
 
 package org.red5.server;
 
-import static org.bytedeco.ffmpeg.global.avformat.av_register_all;
-
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.UUID;
 
-import org.bytedeco.ffmpeg.global.avformat;
-import org.bytedeco.ffmpeg.global.avutil;
 import org.red5.logging.Red5LoggerFactory;
 import org.red5.server.api.Red5;
 import org.slf4j.Logger;
@@ -53,6 +49,8 @@ public class Launcher {
 	private static String instanceIdFilePath = INSTANCE_ID_DEFAULT_PATH;
 	private static String implementationVersion;
 	private static String versionType = null;  //community or enterprise
+	
+	public static final String INSTANCE_STARTED_FILE = System.getProperty("java.io.tmpdir") + File.separator + ".amsinstance";
 
 	/**
 	 * Launch Red5 under it's own classloader
@@ -61,14 +59,14 @@ public class Launcher {
 	 *             on error
 	 */
 	public void launch()  {
-
-		avutil.av_log_set_level(avutil.AV_LOG_ERROR);
+		
 		// check for the logback disable flag
 		boolean useLogback = Boolean.parseBoolean(System.getProperty("useLogback", "true"));
 		if (useLogback && System.getProperty("logback.ContextSelector") == null) {
 			// set our selector
 			System.setProperty("logback.ContextSelector", "org.red5.logging.LoggingContextSelector");
 		}
+		
 		Red5LoggerFactory.setUseLogback(useLogback);
 		// install the slf4j bridge (mostly for JUL logging)
 		SLF4JBridgeHandler.install();
@@ -136,7 +134,13 @@ public class Launcher {
 			else {
 				instanceId =  UUID.randomUUID().toString();
 				writeToFile(idFile.getAbsolutePath(), instanceId);
+				
 			}
+			File f = new File(INSTANCE_STARTED_FILE);
+			if (!f.exists()) {
+				writeToFile(INSTANCE_STARTED_FILE, instanceId);
+			}
+			
 		}
 		return instanceId;
 	}
